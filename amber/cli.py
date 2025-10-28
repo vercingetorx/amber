@@ -146,14 +146,6 @@ def _scrub_one(path: str, pw: str | None, do_repair: bool, safe: bool, harden_pp
         return res
 
     if ok:
-        if harden_ppm > 0:
-            try:
-                added = append_rx_parity(target, extra_ppm=harden_ppm, password=pw)
-            except (AmberError, OSError, ValueError, RuntimeError, zlib.error) as exc:
-                res["status"] = "fail"
-                res["message"] = str(exc)
-                return res
-            res["harden_added"] = int(added)
         res["status"] = "ok"
         return res
     if not do_repair:
@@ -218,13 +210,14 @@ def _scrub_one(path: str, pw: str | None, do_repair: bool, safe: bool, harden_pp
 def cmd_scrub(
     paths: List[str],
     *,
-    recursive: bool,
-    jobs: int,
-    password: Optional[str],
-    repair: bool,
-    safe: bool,
-    harden_extra: int,
-    as_json: bool,
+    recursive: bool = False,
+    jobs: int = 4,
+    password: Optional[str] = None,
+    repair: bool = False,
+    safe: bool = False,
+    harden_extra: int = 0,
+    as_json: bool = False,
+    quiet: bool = False
 ) -> bool:
     """Verify many archives; optional auto‑repair and harden.
 
@@ -276,10 +269,10 @@ def cmd_scrub(
     else:
         for r in results:
             status = r.get("status", "unknown")
-            if status in ("ok", "repaired"):
-                continue
-            line = f"{status.upper():8s} {r['path']} (lrp={r['lrp_fixed']} rx={r['rx_fixed']} harden+={r['harden_added']})"
-            print(line)
+            if not quiet:
+                line = f"{status.upper():8s} {r['path']} (lrp={r['lrp_fixed']} rx={r['rx_fixed']} harden+={r['harden_added']})"
+                print(line)
+            # QUESTION: should this be gated by quiet?
             if status.startswith("hint") and r.get("message"):
                 print("  " + r["message"])  # indent one level
         print(f"Summary: ok={ok} repaired={repaired_ct} failed={failed}")
@@ -300,7 +293,7 @@ def cmd_append(archive: str, inputs: list[str], *, password: Optional[str] = Non
     return True
 
 
-def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, ecc_profile: str = "balanced") -> bool:
+def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, ecc_profile: str = "balanced", quiet: bool = False) -> bool:
     """Seal (create) a new archive from filesystem paths.
 
     Args:
@@ -411,8 +404,9 @@ def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, 
         for arc, full, size in files:
             w.add_file(arc, full)
             processed += size
-            pct = processed * 100.0 / total_bytes
-            print(f" {pct:6.2f}% sealing: {arc}")
+            if not quiet:
+                pct = processed * 100.0 / total_bytes
+                print(f" {pct:6.2f}% sealing: {arc}")
 
         # Finalization can take a moment: RX parity, anchors, index
         print(" Finalizing (RX parity, anchors, index)...", flush=True)
@@ -488,7 +482,7 @@ def cmd_list(archive: str, *, password: Optional[str] = None) -> bool:
     return True
 
 
-def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = None, paths: Optional[list[str]] = None, exists: str = "rename") -> bool:
+def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = None, paths: Optional[list[str]] = None, exists: str = "rename", quiet: bool = False) -> bool:
     """Unseal (extract) files from an archive to a directory."""
 
     from amber.pathutil import norm_path
@@ -513,6 +507,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                         filtered.append(e)
                 entries = filtered
 
+            t0 = time.time()
             def _next_nonconflicting_path(path: str) -> str:
                 if not os.path.exists(path) and not os.path.lexists(path):
                     return path
@@ -534,7 +529,13 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
             unsupported_win_errors = {1314}
             file_entries = [e for e in entries if e.kind == 0]
             total_files = len(file_entries)
+            total_symlinks = sum(1 for e in entries if e.kind == 2)
             processed_files = 0
+            processed_bytes = 0
+            renamed_entries = 0
+            skipped_entries = 0
+            created_dirs = 0
+            created_symlinks = 0
 
             for e in entries:
                 dst = os.path.join(outdir or ".", e.path)
@@ -543,6 +544,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                     print(f"   creating: {e.path}/")
                     _safe_chmod(dst, e.mode)
                     _safe_utime(dst, _combine_time(e.atime_sec, e.atime_nsec), _combine_time(e.mtime_sec, e.mtime_nsec))
+                    created_dirs += 1
                     continue
 
                 if e.kind == 2 and e.symlink_target:
@@ -559,6 +561,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                                 pass
                         elif exists == "skip":
                             print(f"    skipping: {e.path} (exists)")
+                            skipped_entries += 1
                             continue
                         elif exists == "rename":
                             actual_dst = _next_nonconflicting_path(actual_dst)
@@ -569,21 +572,26 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                         if not symlink_warning_emitted:
                             print("symlinks not supported; skipping")
                             symlink_warning_emitted = True
+                        skipped_entries += 1
                         continue
                     try:
                         symlink_fn(e.symlink_target, actual_dst)
                         print(f"  symlinking: {e.path} -> {e.symlink_target}")
+                        created_symlinks += 1
                         if rename_note:
                             print(f"       note: renamed to {actual_dst}")
+                            renamed_entries += 1
                     except (NotImplementedError, AttributeError):
                         if not symlink_warning_emitted:
                             print("symlinks not supported; skipping")
                             symlink_warning_emitted = True
+                        skipped_entries += 1
                     except OSError as exc:
                         if exc.errno in unsupported_symlink_errnos or getattr(exc, "winerror", None) in unsupported_win_errors:
                             if not symlink_warning_emitted:
                                 print("symlinks not supported; skipping")
                                 symlink_warning_emitted = True
+                            skipped_entries += 1
                         else:
                             raise
                     continue
@@ -592,6 +600,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                     continue
 
                 processed_files += 1
+                processed_bytes += e.size or 0
                 os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
                 actual_dst = dst
                 rename_note = None
@@ -601,16 +610,19 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                             raise RuntimeError(f"Cannot overwrite directory with file: {actual_dst}")
                     elif exists == "skip":
                         print(f"    skipping: {e.path} (exists)")
+                        skipped_entries += 1
                         continue
                     elif exists == "rename":
                         actual_dst = _next_nonconflicting_path(actual_dst)
                         rename_note = actual_dst
                     else:
                         raise RuntimeError(f"Destination exists: {actual_dst}")
-                print(f" unsealing: {processed_files:>4}/{total_files:<4} {e.path}")
+                if not quiet:
+                    print(f" unsealing: {processed_files:>4}/{total_files:<4} {e.path}")
                 r.extract(e, actual_dst)
                 if rename_note:
                     print(f"       note: renamed to {actual_dst}")
+                    renamed_entries += 1
                 _safe_chmod(actual_dst, e.mode)
                 mtime_val = _combine_time(e.mtime_sec, e.mtime_nsec)
                 atime_val = _combine_time(e.atime_sec, e.atime_nsec)
@@ -618,6 +630,17 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                     from os.path import getatime
                     atime_val = float(getatime(actual_dst))
                 _safe_utime(actual_dst, atime_val, mtime_val)
+        dt = max(0.000001, time.time() - t0)
+        mib = processed_bytes / (1024.0 * 1024.0)
+        mbps = mib / dt
+        symlink_summary = (
+            str(created_symlinks) if total_symlinks == 0 else f"{created_symlinks}/{total_symlinks}"
+        )
+        print(
+            f"Done: extracted {processed_files}/{total_files} files ({mib:.2f} MiB) in {dt:.1f}s; "
+            f"{mbps:.2f} MiB/s; dirs={created_dirs} symlinks={symlink_summary}; "
+            f"skipped={skipped_entries} renamed={renamed_entries}"
+        )
         return True
     except (
         IndexLocatorError,
@@ -851,6 +874,7 @@ def main(argv: List[str] | None = None):
     ap_create.add_argument("output", help="Output .amber path")
     ap_create.add_argument("inputs", nargs="+", help="Input files/directories")
     ap_create.add_argument("--password", help="Encryption password")
+    ap_create.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
     ap_create.add_argument(
         "--ecc-profile",
         choices=["lean", "balanced", "archival"],
@@ -875,6 +899,7 @@ def main(argv: List[str] | None = None):
     ap_extract.add_argument("--outdir", default=".", help="Output directory")
     ap_extract.add_argument("--password", help="Archive password")
     ap_extract.add_argument("paths", nargs="*", help="Specific archive paths to extract (files or directories)")
+    ap_extract.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
     ap_extract.add_argument(
         "--exists",
         choices=["overwrite", "skip", "rename", "fail"],
@@ -938,13 +963,14 @@ def main(argv: List[str] | None = None):
     ap_scrub.add_argument("--safe", action="store_true", help="When repairing, keep source unchanged and write a repaired copy")
     ap_scrub.add_argument("--harden-extra", type=int, default=0, help="If >0, append this many ppm of RX after verify/repair")
     ap_scrub.add_argument("--json", action="store_true", help="Emit JSON result summary")
+    ap_scrub.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
     
 
 
     args = ap.parse_args(argv)
     try:
         if args.cmd == "seal":
-            cmd_seal(args.output, args.inputs, password=args.password, ecc_profile=args.ecc_profile)
+            cmd_seal(args.output, args.inputs, password=args.password, ecc_profile=args.ecc_profile, quiet=args.quiet)
         elif args.cmd == "unseal":
             cmd_unseal(args.archive, outdir=args.outdir, password=args.password, paths=args.paths, exists=args.exists)
         elif args.cmd == "list":
@@ -971,6 +997,7 @@ def main(argv: List[str] | None = None):
                 safe=args.safe,
                 harden_extra=args.harden_extra,
                 as_json=args.json,
+                quiet=args.quiet
             )
             sys.exit(0 if success else 1)
         else:
