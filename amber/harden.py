@@ -254,6 +254,7 @@ def append_rx_parity(path: str, extra_ppm: int = 10000, password: Optional[str] 
 
 
 def _compute_rx_payload(symbol_bytes: Dict[int, bytes], combo: List[tuple[int, int]], symbol_size: int) -> bytes:
+    """Return the RX parity symbol obtained by linearly combining ``combo`` data symbols."""
     parity = bytearray(symbol_size)
     for sym_index, coeff in combo:
         data = symbol_bytes.get(sym_index)
@@ -268,6 +269,7 @@ def _compute_rx_payload(symbol_bytes: Dict[int, bytes], combo: List[tuple[int, i
 
 
 def _compute_merkle_root_from_index(index_map: Dict) -> bytes:
+    """Compute the Merkle root over chunk tags stored in an index snapshot."""
     leaves: List[bytes] = []
     if not index_map:
         return b"\x00" * 32
