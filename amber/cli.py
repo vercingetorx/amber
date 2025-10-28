@@ -225,7 +225,7 @@ def cmd_scrub(
     safe: bool,
     harden_extra: int,
     as_json: bool,
-) -> int:
+) -> bool:
     """Verify many archives; optional auto‑repair and harden.
 
     Args:
@@ -243,12 +243,14 @@ def cmd_scrub(
         as_json: When True, print a JSON result summary.
 
     Returns:
-        Process exit code: 0 on success, 1 when any failure, 2 on argument/path issues.
+        True when no archives failed verification, False otherwise.
+
+    Raises:
+        RuntimeError: If no archives matching the input paths were found.
     """
     paths = list(_iter_archives(paths, recursive))
     if not paths:
-        print("No archives found", file=sys.stderr)
-        return 2
+        raise RuntimeError("No archives found")
     # Password management: reuse provided; prompt once lazily if needed
     pw_holder = {"pw": password}
 
@@ -281,10 +283,10 @@ def cmd_scrub(
             if status.startswith("hint") and r.get("message"):
                 print("  " + r["message"])  # indent one level
         print(f"Summary: ok={ok} repaired={repaired_ct} failed={failed}")
-    return 0 if failed == 0 else 1
+    return failed == 0
 
 
-def cmd_append(archive: str, inputs: list[str], *, password: Optional[str] = None, ecc_profile: str = "balanced") -> None:
+def cmd_append(archive: str, inputs: list[str], *, password: Optional[str] = None, ecc_profile: str = "balanced") -> bool:
     """Append files to an existing archive and rewrite the trailer.
 
     Args:
@@ -295,9 +297,10 @@ def cmd_append(archive: str, inputs: list[str], *, password: Optional[str] = Non
     """
     print(" Appending files and rewriting index...", flush=True)
     append_to_archive(archive, inputs, password=password, ecc_profile=ecc_profile)
+    return True
 
 
-def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, ecc_profile: str = "balanced"):
+def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, ecc_profile: str = "balanced") -> bool:
     """Seal (create) a new archive from filesystem paths.
 
     Args:
@@ -435,9 +438,10 @@ def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, 
         f"{mib:.2f} MiB in {dt:.1f}s; {mbps:.2f} MiB/s; "
         f"ECC={profile} (~{total_pct:.2f}%: LRP {lrp_pct:.2f}% + RX {rx_pct:.2f}%)"
     )
+    return True
 
 
-def cmd_list(archive: str, *, password: Optional[str] = None):
+def cmd_list(archive: str, *, password: Optional[str] = None) -> bool:
     """List archive entries.
 
     Args:
@@ -481,9 +485,10 @@ def cmd_list(archive: str, *, password: Optional[str] = None):
             print(f"{k}\t-> {e.symlink_target}\t{e.path}")
         else:
             print(f"{k}\t{e.path}")
+    return True
 
 
-def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = None, paths: Optional[list[str]] = None, exists: str = "rename"):
+def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = None, paths: Optional[list[str]] = None, exists: str = "rename") -> bool:
     """Unseal (extract) files from an archive to a directory."""
 
     from amber.pathutil import norm_path
@@ -613,6 +618,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
                     from os.path import getatime
                     atime_val = float(getatime(actual_dst))
                 _safe_utime(actual_dst, atime_val, mtime_val)
+        return True
     except (
         IndexLocatorError,
         IndexFrameError,
@@ -637,7 +643,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
         sys.exit(2)
 
 
-def cmd_verify(archive: str, *, password: Optional[str] = None):
+def cmd_verify(archive: str, *, password: Optional[str] = None) -> bool:
     """Verify archive integrity.
 
     Args:
@@ -657,6 +663,7 @@ def cmd_verify(archive: str, *, password: Optional[str] = None):
                 )
             ok = r.verify()
             print("OK" if ok else "FAIL")
+            return ok
     except (
         IndexLocatorError,
         IndexFrameError,
@@ -673,7 +680,7 @@ def cmd_verify(archive: str, *, password: Optional[str] = None):
             sys.exit(2)
 
 
-def cmd_repair(archive: str, *, password: Optional[str] = None, safe: bool = False, output: Optional[str] = None):
+def cmd_repair(archive: str, *, password: Optional[str] = None, safe: bool = False, output: Optional[str] = None) -> bool:
     """Attempt ECC repair (and rebuild index if needed).
 
     Args:
@@ -754,9 +761,10 @@ def cmd_repair(archive: str, *, password: Optional[str] = None, safe: bool = Fal
     except (AmberError, OSError, ValueError, RuntimeError) as exc:
         print(f"Error: failed to rebuild index metadata: {exc}", file=sys.stderr)
         raise
+    return True
 
 
-def cmd_rebuild(archive: str, *, password: Optional[str] = None):
+def cmd_rebuild(archive: str, *, password: Optional[str] = None) -> bool:
     """Fully rewrite an archive via staging and atomic swap.
 
     Args:
@@ -768,9 +776,10 @@ def cmd_rebuild(archive: str, *, password: Optional[str] = None):
     """
     backup_path = rebuild_archive(archive, password=password)
     print(f"Rebuilt archive committed. Backup written to: {backup_path}")
+    return True
 
 
-def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] = None, ecc_profile: Optional[str] = None):
+def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] = None, ecc_profile: Optional[str] = None) -> bool:
     """Verify an archive and append extra RX parity to its latest ECC group.
 
     Args:
@@ -800,9 +809,10 @@ def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] 
     print(f" Appending ~{pct:.2f}% RX parity and rewriting index...", flush=True)
     added = append_rx_parity(archive, extra_ppm=extra, password=password)
     print(f"Appended {added} RX parity symbol(s)")
+    return True
 
 
-def cmd_info(archive: str, *, password: Optional[str] = None):
+def cmd_info(archive: str, *, password: Optional[str] = None) -> bool:
     """Show archive information.
 
     Args:
@@ -823,6 +833,7 @@ def cmd_info(archive: str, *, password: Optional[str] = None):
         print(f"    Files: {len([e for e in r.entries if e.kind == 0])}")
         print(f"    Directories: {len([e for e in r.entries if e.kind == 1])}")
         print(f"    Symlinks: {len([e for e in r.entries if e.kind == 2])}")
+    return True
 
 
 def main(argv: List[str] | None = None):
@@ -951,18 +962,17 @@ def main(argv: List[str] | None = None):
         elif args.cmd == "append":
             cmd_append(args.archive, args.inputs, password=args.password, ecc_profile=args.ecc_profile)
         elif args.cmd == "scrub":
-            sys.exit(
-                cmd_scrub(
-                    args.paths,
-                    recursive=args.recursive,
-                    jobs=args.jobs,
-                    password=args.password,
-                    repair=args.repair,
-                    safe=args.safe,
-                    harden_extra=args.harden_extra,
-                    as_json=args.json,
-                )
+            success = cmd_scrub(
+                args.paths,
+                recursive=args.recursive,
+                jobs=args.jobs,
+                password=args.password,
+                repair=args.repair,
+                safe=args.safe,
+                harden_extra=args.harden_extra,
+                as_json=args.json,
             )
+            sys.exit(0 if success else 1)
         else:
             raise RuntimeError("Unknown command")
     except FileNotFoundError as e:
