@@ -52,6 +52,15 @@ def write_index_trailer(
     index_payload: bytes,
     merkle_root: bytes,
 ) -> None:
+    """
+    Writes the archive trailer, which consists of two redundant copies of the
+    index frame, each followed by a locator.
+
+    The redundancy of the index is a key feature for robustness, as it
+    provides a backup in case one copy is corrupted. The locator blocks
+    allow for efficient discovery of the index frames when reading the
+    archive from the end.
+    """
     import zlib
 
     frame_flags = 0
