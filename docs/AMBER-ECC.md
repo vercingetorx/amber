@@ -137,7 +137,7 @@ Security Considerations
 
 POC Implementation Notes (Python)
 
-- Dependencies: hashlib (blake2s), zlib, pickle, crc32c, and a small GF(256) math layer (implemented in pure Python).
+- Dependencies: the TLV utilities in `amber.tlv`, crc32c, and a GF(256) math layer (pure Python with optional NumPy acceleration). Standard library modules (hashlib/zlib) cover hashing and compression.
 - Start with: symbolization, per‑symbol tags, LRP (XOR) encoder/decoder, then RX encoder; implement peeling + fallback sparse elimination.
 - Provide a CLI to generate and append parity frames and to verify/repair archives.
 
