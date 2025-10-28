@@ -156,6 +156,7 @@ class RXParityInfo:
 
 
 class ArchiveWriter:
+    """Streaming writer that produces fully authenticated Amber archives."""
     def __init__(
         self,
         out_path: str,
@@ -255,6 +256,7 @@ class ArchiveWriter:
         atime_sec: Optional[int] = None,
         atime_nsec: Optional[int] = None,
     ):
+        """Record a directory entry to preserve hierarchy and metadata."""
         e = Entry(entry_id=self._alloc_id(), kind=1, path=norm_path(arc_path), mode=mode)
         if mtime_sec is not None:
             e.mtime_sec = int(mtime_sec)
@@ -273,12 +275,14 @@ class ArchiveWriter:
         self.entries.append(e)
 
     def add_symlink(self, arc_path: str, target: str):
+        """Record a symbolic link pointing to ``target``."""
         e = Entry(entry_id=self._alloc_id(), kind=2, path=norm_path(arc_path), symlink_target=target)
         self._write_entry_begin(e)
         self._write_entry_end(e)
         self.entries.append(e)
 
     def add_file(self, arc_path: str, fs_path: str, codec_id: Optional[int] = None, chunk_size: Optional[int] = None, mode: Optional[int] = None):
+        """Stream a filesystem file into the archive, chunking and hashing on the fly."""
         if self.f is None:
             raise RuntimeError("Archive not open")
         arc_path = norm_path(arc_path)
@@ -373,6 +377,18 @@ class ArchiveWriter:
         self.entries.append(e)
 
     def finalize(self):
+        """
+        Completes the archive writing process.
+
+        This method performs several critical steps to ensure the archive is
+        valid and self-contained:
+        1.  Flushes any pending LRP stripes.
+        2.  Generates and writes all RX parity symbols.
+        3.  Computes the final Merkle root over all data chunks.
+        4.  Writes a final anchor record.
+        5.  Builds and writes the main index, which contains all metadata
+            needed to read the archive.
+        """
         if self.f is None:
             raise RuntimeError("Archive not open")
         # Flush pending ECC stripes (via shared chunk context)
@@ -445,6 +461,14 @@ class ArchiveWriter:
     # Legacy LRP helpers removed; LRP emission is centralized in chunkemit.
 
     def _generate_rx_parity(self):
+        """
+        Generates and writes RX parity symbols for the current ECC group.
+
+        The number of parity symbols is determined by the `rx_epsilon_ppm`
+        parameter, which specifies the desired overhead in parts per million.
+        Each parity symbol is a random linear combination of the data symbols,
+        generated deterministically from a seed.
+        """
         # Use stable ordering of data indices to match decoder
         data_indices = sorted([info.symbol_index for info in self.symbols if not info.is_parity])
         if not data_indices:
@@ -537,6 +561,13 @@ class ArchiveWriter:
         })
 
     def _compute_merkle_root(self) -> bytes:
+        """
+        Computes the archive-wide Merkle root from the tags of all data chunks.
+
+        The Merkle tree provides a single, verifiable hash for the entire
+        archive's data content. It's constructed as a binary tree, with a
+        "promote" rule for odd numbers of nodes at each level.
+        """
         # Flatten all chunk tags in file order
         leaves: List[bytes] = []
         for e in self.entries:
@@ -562,6 +593,15 @@ class ArchiveWriter:
         return level[0]
 
     def _build_index_payload(self) -> bytes:
+        """
+        Constructs the main index for the archive.
+
+        The index is a comprehensive data structure that contains all the
+        metadata required to read the archive, including file and directory
+        entries, chunk locations, ECC information, and anchors. It's
+        serialized to a compact binary format (TLV) before being written
+        to the trailer.
+        """
         # Assemble index map (Python dict)
         entries = []
         for e in self.entries:
