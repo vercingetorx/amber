@@ -15,6 +15,7 @@ from .codec import Codec
 
 
 class ECCRepairResult:
+    """Book-keeping container describing what the repair pass managed to fix."""
     def __init__(self):
         self.lrp_repaired: List[int] = []
         self.rx_repaired: List[int] = []
@@ -22,6 +23,18 @@ class ECCRepairResult:
 
 
 def detect_corrupted_symbols(reader, file_handle) -> Set[int]:
+    """
+    Identifies corrupted symbols by performing a multi-level integrity check.
+
+    1.  **Symbol Tag Check:** Each symbol's stored tag is compared against a fresh
+        hash of its payload. This is the primary and most granular check.
+    2.  **Chunk Integrity Check:** For data symbols, the integrity of the entire
+        chunk record is also verified. This helps detect corruption in the chunk
+        header or other metadata that wouldn't be caught by the symbol tag alone.
+
+    Returns:
+        A set of symbol indices corresponding to corrupted symbols.
+    """
     corrupted: Set[int] = set()
     chunk_symbols: Dict[int, List[int]] = {}
     for sym in reader.symbols:
@@ -60,6 +73,7 @@ def detect_corrupted_symbols(reader, file_handle) -> Set[int]:
 
 
 def _verify_chunk_integrity(reader, fh, record_offset: int) -> bool:
+    """Re-read a chunk record and ensure its payload still matches the stored tag."""
     decryptor = reader.decryptor
     try:
         rtype, _rflags, hdr_ext, payload = read_record_at(fh, record_offset, decryptor=decryptor)
@@ -100,6 +114,7 @@ def repair_archive(reader, path: str) -> ECCRepairResult:
 
 
 def _repair_lrp(reader, fh, corrupted: Set[int]) -> List[int]:
+    """Repair data/parity symbols that belong to single-erasure LRP stripes."""
     repaired: List[int] = []
     for stripe in reader.stripes:
         targets = [idx for idx in stripe.data_symbols + [stripe.parity_symbol] if idx in corrupted]
@@ -116,12 +131,28 @@ def _repair_lrp(reader, fh, corrupted: Set[int]) -> List[int]:
 
 
 def _repair_rx(reader, fh, corrupted: Set[int]) -> List[int]:
-    """RX repair using peeling with a sparse elimination fallback.
-
-    Peeling exploits degree-1 equations to recover symbols iteratively, then
-    applies a small Gaussian elimination on the residual if feasible.
     """
-    # Unknown (data) symbols only
+    Attempts to repair corrupted data symbols using the RX error correction scheme.
+
+    This function implements a two-stage decoding process:
+
+    1.  **Peeling Decoder:** An efficient iterative process that solves for unknowns
+        in equations with only one missing variable (degree 1). As symbols are
+        solved, they are substituted into other equations, often creating new
+        degree-1 equations. This process continues until no more symbols can be
+        solved this way.
+
+    2.  **Sparse Elimination Fallback:** If the peeling decoder cannot solve all
+        unknowns, a residual system of linear equations remains. If this system
+        is small enough (e.g., <= 32 variables), this function will attempt to
+        solve it using Gaussian elimination.
+
+    The combination of these two methods provides a good balance between
+    performance and capability, as the peeling decoder is very fast for the
+    common case, and the fallback can handle more complex loss patterns.
+    """
+    # We only solve for data symbols. Parity symbols are not directly recovered
+    # by this process, but are used to form the equations.
     unknowns = sorted(idx for idx in corrupted if not reader.symbols[idx].is_parity)
     if not unknowns:
         return []
@@ -151,7 +182,14 @@ def _repair_rx(reader, fh, corrupted: Set[int]) -> List[int]:
                     if isinstance(sb_item, (bytes, bytearray)) and sb_item:
                         group_data_indices[sb_item] = sorted_di
 
-    # Build equations from available parity symbols
+    # Build a system of linear equations. Each equation is formed from a valid
+    # (uncorrupted) parity symbol. The equation is of the form:
+    #
+    #   c1*x1 + c2*x2 + ... = P - (c_known * x_known + ...)
+    #
+    # where x_i are the unknown (corrupted) symbols, and P is the parity symbol.
+    # The right-hand side (RHS) is adjusted by subtracting the contributions
+    # of all known (uncorrupted) symbols.
     equations = []  # list of dict(pos->coeff), rhs bytearray
     for parity in reader.rx_parities:
         if parity.symbol_index in corrupted:
@@ -229,7 +267,10 @@ def _repair_rx(reader, fh, corrupted: Set[int]) -> List[int]:
     if not equations:
         return []
 
-    # Peeling decoder
+    # --- Peeling Decoder ---
+    #
+    # This is the first and most efficient stage of the recovery process.
+    # It iteratively solves equations that have only one unknown variable.
     solutions: Dict[int, bytes] = {}
     # Build adjacency: for each unknown pos, which equations and coefficients
     var_to_eqs: Dict[int, List[int]] = {}
@@ -288,7 +329,11 @@ def _repair_rx(reader, fh, corrupted: Set[int]) -> List[int]:
             repaired.append(sym_index)
         return repaired
 
-    # Fallback: sparse elimination on residuals if small
+    # --- Gaussian Elimination Fallback ---
+    #
+    # If the peeling decoder fails to solve all unknowns, we are left with a
+    # residual system of equations. If this system is small enough, we can
+    # solve it using Gaussian elimination.
     residual_vars = [pos for pos in range(len(unknowns)) if pos not in solutions]
     if not residual_vars:
         return repaired
@@ -393,6 +438,15 @@ def _repair_rx(reader, fh, corrupted: Set[int]) -> List[int]:
 
 
 def _solve_linear_system(equations: List[Tuple[List[int], bytearray]], unknown_count: int) -> List[bytes | None]:
+    """
+    Solves a system of linear equations using a brute-force approach.
+
+    This function is a fallback solver and is not intended for large systems.
+    It works by trying all combinations of equations to find a solvable
+    (invertible) matrix. This is computationally expensive and only suitable
+    for very small systems. The main `_repair_rx` function uses a more
+    efficient peeling decoder and a targeted Gaussian elimination fallback.
+    """
     if unknown_count == 0:
         return []
     eq_count = len(equations)
@@ -412,6 +466,13 @@ def _solve_linear_system(equations: List[Tuple[List[int], bytearray]], unknown_c
 
 
 def _invert_matrix(matrix: List[List[int]]) -> List[List[int]] | None:
+    """
+    Inverts a matrix in GF(2^8) using Gaussian elimination.
+
+    This function augments the input matrix with the identity matrix and then
+    performs row operations to transform the input matrix into the identity
+    matrix. The resulting augmented part is the inverse of the original matrix.
+    """
     n = len(matrix)
     aug = []
     for i in range(n):
