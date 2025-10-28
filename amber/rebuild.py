@@ -68,9 +68,17 @@ def _infer_rx_epsilon(reader: ArchiveReader) -> int:
 
 
 def rebuild_archive(path: str, *, password: Optional[str] = None, backup_suffix: str = ".bak") -> Path:
-    """Rebuild an archive by fully rewriting it from staged contents.
+    """
+    Rebuilds an archive by extracting its contents to a temporary "staging"
+    area, creating a new archive from the staged content, and then atomically
+    swapping the new archive with the old one.
 
-    Returns the path to the backup of the original archive (original name + backup_suffix).
+    This is a safe and robust way to rewrite an archive, as it ensures that
+    the original archive is not modified until the new one has been successfully
+    created and verified.
+
+    Returns:
+        The path to the backup of the original archive.
     """
     src = Path(path)
     if not src.exists():
