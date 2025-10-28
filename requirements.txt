@@ -1,0 +1,2 @@
+pycryptodomex
+argon2-cffi
