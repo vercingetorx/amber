@@ -6,7 +6,7 @@ setup(
     version="0.1",
     packages=find_packages(),
     description="A minimal, future‑proof archive format focused on long‑term safety against bit rot.",
-    author="xioren",
+    author="vercingetorx",
     install_requires=[
         "pycryptodomex>=3.23.0",
         "argon2-cffi>=23.1.0",
