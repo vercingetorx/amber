@@ -10,6 +10,18 @@ from .records import build_chunk_header_ext, write_record
 
 
 class ChunkEmitContext:
+    """
+    Manages the process of creating and writing data chunks and ECC symbols.
+
+    This class is a stateful helper that abstracts away the details of LRP
+    stripe management. It accumulates data symbols and, when enough are
+    present (as defined by `lrp_k`), it computes and writes an LRP parity
+    symbol.
+
+    By using a single context across multiple files, LRP stripes can span
+    file boundaries, which is more efficient for archives containing many
+    small files.
+    """
     def __init__(
         self,
         *,
