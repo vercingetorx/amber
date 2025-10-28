@@ -134,7 +134,27 @@ def _add_to_basis(row: Dict[int, int], basis: List[Tuple[int, Dict[int, int]]]) 
 
 
 def sample_rx_combination(seed_base: bytes, seed_id: int, data_indices: List[int]) -> List[Tuple[int, int]]:
-    """Deterministically sample an RX combination with rank verification.
+    """
+    Deterministically samples a random linear combination for an RX parity symbol.
+
+    This function is the core of the RX parity generation. It ensures that
+    the generated parity symbols are both random and likely to be linearly
+    independent, which is crucial for the decoder to be able to solve for
+    lost symbols.
+
+    The process involves:
+    1.  **Candidate Generation:** A candidate combination is drawn using a
+        deterministic PRNG. This process includes a "virtual precode" to
+        improve the properties of the generator, and a pivot to ensure
+        all symbols are covered.
+    2.  **Rank Verification:** The candidate is checked for linear independence
+        against all previously generated combinations for the same ECC group.
+        This is done by attempting to add the candidate to a basis of the
+        previously accepted combinations. If it's dependent, a new candidate
+        is generated and the process is repeated.
+
+    This ensures that the encoder and decoder will always agree on the same
+    set of combinations, which is essential for successful recovery.
 
     Properties:
     - Uniform: small fixed degree band ({3,4,5}) with virtual precode expansion
