@@ -115,14 +115,6 @@ Best Practices (Recommended)
   - Command: `amber harden out.amber --extra-ppm 20000`
   - You can harden encrypted archives too: add `--password`.
 
-- Use a checksumming filesystem if possible
-  - ZFS/btrfs help detect underlying corruption even without ECC RAM.
-  - Still keep periodic archive verifies; they validate the full storage domain bytes.
-
-- Non‑ECC RAM considerations
-  - Creation/repair uses cryptographic tags; results are verified before committing. Nonetheless, transient memory faults can cause crashes/retries.
-  - The mitigation is routine verify + redundancy (a second copy) rather than relying on a single instance.
-
 - Migration and backups
   - After moving archives to new media, run `verify` and consider `harden` to refresh parity margins.
 
