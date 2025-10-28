@@ -262,11 +262,11 @@ MIME and Identification
 POC Implementation Plan (Python)
 
 - Dependencies (baseline, pure-Python friendly where possible):
-  - hashlib (blake2s) for hashing
-  - zlib for compression
-  - pickle for index encoding
-- PyCryptodomex (XChaCha20-Poly1305) only when encryption is enabled
-  - Built-in CRC32C implementation
+  - the custom TLV encoder/decoder in `amber.tlv` for index/anchor serialization
+  - crc32c for record/header checks
+  - optional NumPy acceleration for GF(256) math
+- PyCryptodomex (XChaCha20-Poly1305) and argon2-cffi are required when encryption is enabled
+- Built-in CRC32C implementation
 
 - Writer (ArchiveWriter):
   - init(superblock params)
@@ -283,7 +283,7 @@ POC Implementation Plan (Python)
   - scan_without_index() -> best-effort sequential listing (recovery mode)
 
 - CLI (amber):
-  - create, list, extract, verify, encrypt
+  - seal, list, unseal, verify, repair, rebuild, append, harden, scrub
 
 Testing Strategy
 
