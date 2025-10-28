@@ -32,6 +32,7 @@ INDEX_LOC_MAGIC = b"AMBRLOC\x00"
 
 
 class _Sym:
+    """Captured symbol metadata used to rebuild ECC group structures."""
     def __init__(
         self,
         index: int,
@@ -75,6 +76,11 @@ def _entry_begin_payload(entry_id: int, kind: int, path: str, *, mode: Optional[
 
 
 def _scan_inputs(paths: List[str]) -> Tuple[List[Tuple[str, Dict[str, Optional[int]]]], List[Tuple[str, str]], List[Tuple[str, str, int]]]:
+    """Return separate manifests for directories, symlinks, and files to append.
+
+    Each result entry contains the archive path plus the metadata required to
+    reproduce it inside the archive (coarse timestamps, mode bits, file sizes).
+    """
     def _split(st):
         try:
             ns = st.st_mtime_ns
@@ -136,6 +142,7 @@ def _scan_inputs(paths: List[str]) -> Tuple[List[Tuple[str, Dict[str, Optional[i
 
 
 def append_to_archive(archive_path: str, inputs: List[str], *, password: Optional[str] = None, ecc_profile: Optional[str] = None) -> None:
+    """Append new paths to an existing archive and refresh its parity and index."""
     with ArchiveReader(archive_path, password=password) as r:
         truncate_offset = r.index_region_start
         if r.anchors_meta:
