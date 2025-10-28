@@ -33,8 +33,10 @@ Quick Start
 - Append files to an existing archive (safe append)
   - `amber append out.amber path1 path2 ...`
   - Encrypted: `amber append out.amber path1 ... --password secret`
-- Verify integrity (scrub)
+- Verify integrity
   - `amber verify out.amber`
+- Scrub many archives (optional auto repair/harden)
+  - `amber scrub /path/to/archives --recursive --repair --harden-extra 20000`
 - Rebuild archive (full rewrite with staging + atomic swap + `.bak` backup)
   - `amber rebuild out.amber`
   - Encrypted: add `--password secret`
@@ -102,9 +104,9 @@ Best Practices (Recommended)
     - Overhead: ≈12.3%
     - SLO: stronger margin for clustered faults or weaker media; same LRP guarantee + higher RX headroom.
 
-- Scrub regularly (verify)
+- Scrub regularly
   - Cold data: quarterly. Active archives: monthly.
-  - Command: `amber verify out.amber`
+  - Command: `amber verify out.amber` for quick checks; use `amber scrub /archives --recursive --repair` for fleet maintenance.
   - If verify fails, run: `amber repair out.amber`, then verify again.
 
 - Harden after clean verifies or repairs
