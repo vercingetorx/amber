@@ -10,7 +10,7 @@ Amber is unapologetically opinionated. The focus is long-term safety, not a kitc
 - Self-healing by design: Local Repair Parity plus RX parity gives single-symbol guarantees and probabilistic recovery for wider loss. Rebuild workflows operate from content alone when trailers are gone.
 - Minimal dependencies (for optional encryption): just PyCryptodomex and argon2‑cffi.
 
-Amber is not for everyone but if you want a secure archive that stays verifiable and repairable years later—with one set of hardened assumptions—this is the bar we guarantee.
+For those wanting a secure archive that stays verifiable and repairable years later—with one set of hardened assumptions—this is the bar we guarantee.
 
 Overview
 
