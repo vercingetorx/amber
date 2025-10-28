@@ -802,6 +802,29 @@ def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] 
     print(f"Appended {added} RX parity symbol(s)")
 
 
+def cmd_info(archive: str, *, password: Optional[str] = None):
+    """Show archive information.
+
+    Args:
+        archive: Path to an .amber file.
+        password: Password for encrypted archives.
+    """
+    with ArchiveReader(archive, password=password) as r:
+        print(f"Archive: {archive}")
+        if r.superblock:
+            print(f"  Version: {r.superblock.version_major}.{r.superblock.version_minor}")
+            print(f"  UUID: {r.superblock.uuid.hex()}")
+            print(f"  Created: {r.superblock.created_sec}")
+            print(f"  Flags: {r.superblock.flags}")
+        if r.index:
+            print(f"  Default chunk size: {r.index.get('default_chunk_size', 'N/A')}")
+            print(f"  Default codec: {r.index.get('default_codec', 'N/A')}")
+        print(f"  Entries: {len(r.entries)}")
+        print(f"    Files: {len([e for e in r.entries if e.kind == 0])}")
+        print(f"    Directories: {len([e for e in r.entries if e.kind == 1])}")
+        print(f"    Symlinks: {len([e for e in r.entries if e.kind == 2])}")
+
+
 def main(argv: List[str] | None = None):
     ap = argparse.ArgumentParser(
         prog="amber",
@@ -830,6 +853,10 @@ def main(argv: List[str] | None = None):
     ap_list = sub.add_parser("list", help="List archive contents")
     ap_list.add_argument("archive", help="Archive path")
     ap_list.add_argument("--password", help="Archive password")
+
+    ap_info = sub.add_parser("info", help="Show archive information")
+    ap_info.add_argument("archive", help="Archive path")
+    ap_info.add_argument("--password", help="Archive password")
 
     # unseal
     ap_extract = sub.add_parser("unseal", help="Unseal files")
@@ -911,6 +938,8 @@ def main(argv: List[str] | None = None):
             cmd_unseal(args.archive, outdir=args.outdir, password=args.password, paths=args.paths, exists=args.exists)
         elif args.cmd == "list":
             cmd_list(args.archive, password=args.password)
+        elif args.cmd == "info":
+            cmd_info(args.archive, password=args.password)
         elif args.cmd == "verify":
             cmd_verify(args.archive, password=args.password)
         elif args.cmd == "repair":
