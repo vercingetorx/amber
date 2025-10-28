@@ -36,6 +36,7 @@ class EncryptionParams:
 
 
 class EncryptionContext:
+    """Thin wrapper around XChaCha20-Poly1305 with Argon2id key derivation."""
     def __init__(self, key: bytes, params: EncryptionParams):
         self.key = key
         self.params = params
@@ -43,6 +44,7 @@ class EncryptionContext:
 
     @classmethod
     def create(cls, password: str) -> "EncryptionContext":
+        """Derive a fresh key from ``password`` using the fixed Argon2id profile."""
         if not (_HAS_CRYPTO and _argon_hash is not None and _ArgonType is not None):
             raise RuntimeError("argon2-cffi and PyCryptodomex are required for encryption support")
         salt = os.urandom(SALT_SIZE)
@@ -67,6 +69,7 @@ class EncryptionContext:
 
     @classmethod
     def from_params(cls, password: str, params: EncryptionParams) -> "EncryptionContext":
+        """Recreate the context from stored KDF parameters (used when reading archives)."""
         if not (_HAS_CRYPTO and _argon_hash is not None and _ArgonType is not None):
             raise RuntimeError("argon2-cffi and PyCryptodomex are required for encryption support")
         if (
@@ -90,11 +93,13 @@ class EncryptionContext:
         return hmac.new(self.key, b"AMBER_REC_NONCE" + nonce_material, hashlib.sha512).digest()[:NONCE_SIZE]
 
     def encrypt(self, aad: bytes, plaintext: bytes, *, nonce_material: bytes) -> bytes:
+        """Return ciphertext||tag for ``plaintext``, deriving a deterministic nonce from ``nonce_material``."""
         nonce = self._derive_nonce(nonce_material)
         ciphertext, tag = self._cipher.encrypt(nonce, plaintext, associated_data=aad)
         return nonce + ciphertext + tag
 
     def decrypt(self, aad: bytes, payload: bytes) -> bytes:
+        """Authenticate and decrypt the given payload produced by :meth:`encrypt`."""
         if len(payload) < NONCE_SIZE + TAG_SIZE:
             raise ValueError("Encrypted payload too short")
         nonce = payload[:NONCE_SIZE]
