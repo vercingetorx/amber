@@ -771,7 +771,7 @@ def cmd_rebuild(archive: str, *, password: Optional[str] = None):
 
 
 def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] = None, ecc_profile: Optional[str] = None):
-    """Append RX parity to the archive’s latest ECC group.
+    """Verify an archive and append extra RX parity to its latest ECC group.
 
     Args:
         archive: Path to the .amber file.
