@@ -194,11 +194,24 @@ class ArchiveReader:
                 wf.write(raw)
 
     def verify(self) -> bool:
+        """
+        Performs a comprehensive integrity check of the archive.
+
+        This method validates the archive at multiple levels:
+        1.  **Chunk Tags:** Verifies the integrity of each individual data chunk.
+        2.  **File Hashes:** Reconstructs the full hash of each file and compares
+            it against the stored hash in the index.
+        3.  **Merkle Root:** Recalculates the archive-wide Merkle root from the
+            chunk tags and compares it against the root stored in the index.
+
+        Returns:
+            True if all checks pass, False otherwise.
+        """
         if self.f is None:
             raise RuntimeError("Archive not open")
         ok = True
-        # Verify index hash
-        # Already checked on load. Now verify file hashes by reconstructing.
+        # The index hash is checked during `_load_index`. This method focuses on
+        # content verification.
         for e in self.entries:
             if e.kind != 0:
                 continue
@@ -225,6 +238,19 @@ class ArchiveReader:
 
     # internals
     def _load_index(self):
+        """
+        Finds and loads the archive index from the end of the file.
+
+        This function implements a robust mechanism to locate the index, which
+        is crucial for reading the archive. The process involves:
+        1.  Reading a tail buffer from the end of the file.
+        2.  Scanning backwards through the buffer to find the `INDEX_LOC_MAGIC`.
+        3.  Validating the locator's CRC and UUID to ensure it's a valid pointer.
+        4.  Handling the redundant index frames to find the start of the entire
+            index region.
+        5.  Performing security checks, such as a bounds check on the
+            uncompressed index size to prevent decompression bombs.
+        """
         assert self.f is not None
         # Read last 128 KiB and search backward for the latest valid locator (CRC-checked)
         st = os.fstat(self.f.fileno())
@@ -416,6 +442,15 @@ class ArchiveReader:
         return level[0]
 
     def _load_ecc_groups(self):
+        """
+        Loads and merges ECC group information from the index.
+
+        Archives that have been appended to may have multiple ECC groups. This
+        function merges the symbol and stripe information from all groups into
+        a single, unified view for the reader. It also performs validation to
+        ensure that critical parameters like `symbol_size` are consistent
+        across all groups.
+        """
         self.symbols = []
         self.stripes = []
         if not self.index:
