@@ -6,8 +6,8 @@ import random
 import sys
 from typing import Optional
 
-from .reader import ArchiveReader
-from .errors import AmberError
+from amber.reader import ArchiveReader
+from amber.errors import AmberError
 
 
 def _flip_byte(path: str, offset: int, xor_val: int = 0xFF) -> None:
