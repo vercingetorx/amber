@@ -515,7 +515,7 @@ class AmberTests(unittest.TestCase):
                 target = next(info for info in reader.symbols if not info.is_parity)
                 _corrupt_symbol(archive_path, target, offset=0)
             cmd_repair(str(archive_path), password=None, safe=True, output=None)
-            repaired = archive_path.with_name(archive_path.stem + ".repaired")
+            repaired = archive_path.with_name(archive_path.stem + ".repaired.amber")
             self.assertTrue(repaired.exists())
             with ArchiveReader(str(repaired)) as reader:
                 self.assertTrue(reader.verify())
