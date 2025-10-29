@@ -116,9 +116,9 @@ Decoding Workflow
 Overhead and Expected Recovery
 
 - Example configs (symbol 64 KiB, window 4096 symbols ~256 MiB):
-  - “Lean”: LRP off, RX ε=0.03 → recovers up to ~3% random symbol loss with failure probability < 10^-9; burst resilience via interleaving.
-  - “Balanced”: LRP 1/16 (6.25%), RX ε=0.02 → near‑instant single‑symbol fixes; multi‑loss handled by RX with very high success; total ≈ 8.25%.
-  - “Archival”: LRP 1/12 (8.3%), RX ε=0.04 → strong resilience to clustered faults; total ≈ 12.3%.
+  - “Lean”: LRP off, RX ε=0.02 → recovers up to ~2% random symbol loss with failure probability < 10^-9; burst resilience via interleaving.
+  - “Balanced”: LRP 1/16 (6.25%), RX ε=0.03 → near‑instant single‑symbol fixes; multi‑loss handled by RX with very high success; total ≈ 9.25%.
+  - “Archival”: LRP 1/12 (8.3%), RX ε=0.05 → strong resilience to clustered faults; total ≈ 13.3%.
 - Practically, random bit flips are detected at symbol granularity and treated as single‑symbol erasures; even the “Lean” profile corrects them with modest overhead.
 
 Complexity
