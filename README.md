@@ -121,7 +121,7 @@ Best Practices (Recommended)
 What “Start Lean, Append Later” Means
 
 - Begin with a small but meaningful RX budget (e.g., 2–3%).
-- As media ages or after any repair event, append +1–2% parity.
+- As media ages or after any repair event, append +1–3% parity.
 - Appending writes parity and a refreshed index; the original payload is not rewritten.
 - Never append parity on a dirty (unrepaired) archive.
 
