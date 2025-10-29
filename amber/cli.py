@@ -288,6 +288,12 @@ def cmd_append(archive: str, inputs: list[str], *, password: Optional[str] = Non
         ecc_profile: ECC preset for the appended segment.
     """
     print(f" Appending files to {archive} and rewriting index...", flush=True)
+    try:
+        with ArchiveReader(archive, password=password) as r:
+            if not r.verify():
+                raise RuntimeError("Verification failed; run amber repair before appending.")
+    except (AmberError, OSError, ValueError, RuntimeError, zlib.error) as exc:
+        raise RuntimeError(f"Verification failed before append: {exc}")
     append_to_archive(archive, inputs, password=password, ecc_profile=ecc_profile)
     return True
 
