@@ -2,7 +2,7 @@ Amber — Robust Long‑Term Archive Container
 
 Why Amber?
 
-Amber is unapologetically opinionated. The focus is long-term safety, not a kitchen sink of toggles:
+Amber is unapologetically opinionated. The focus is long-term safety and security, not a kitchen sink of toggles:
 
 - Strong defaults only: AEAD is XChaCha20‑Poly1305, keys come from Argon2id (256 MiB / 3 passes / 4 lanes), and ECC always emits the same stripe and RX budgets. There are no weak knobs to misconfigure.
 - Integrity everywhere: every chunk, file, index, anchor, and parity record is authenticated and hashed. Merkle roots and periodic anchors make trailer loss survivable.
@@ -43,7 +43,7 @@ Quick Start
 - Attempt repair (in-place metadata rebuild + ECC fix)
   - `amber repair out.amber`
 - Append extra parity (harden)
-  - Default is balanced (+2% RX): `amber harden out.amber`
+  - Default is balanced (+3% RX): `amber harden out.amber`
   - Explicit amount: `amber harden out.amber --extra-ppm 20000`
   - Harden refuses to run unless the archive verifies clean; make sure `amber verify` (and `amber repair`) succeed first.
 
@@ -97,11 +97,11 @@ Best Practices (Recommended)
   - Lean: RX ~2% (no LRP)
     - Overhead: ≈2%
     - SLO: high‑probability repair of scattered random symbol losses up to ~ε per window; rely on a second copy for belt‑and‑suspenders.
-  - Balanced: LRP 1/16 (~6.25%) + RX 2% (≈8.25% total)
-    - Overhead: ≈8.25%
+  - Balanced: LRP 1/16 (~6.25%) + RX 3% (≈9.25% total)
+    - Overhead: ≈9.25%
     - SLO: guaranteed 1‑symbol repair per stripe (LRP); plus high‑probability recovery of additional scattered losses (RX).
-  - Archival: LRP 1/12 (~8.3%) + RX 4% (≈12.3% total)
-    - Overhead: ≈12.3%
+  - Archival: LRP 1/12 (~8.3%) + RX 5% (≈13.3% total)
+    - Overhead: ≈13.3%
     - SLO: stronger margin for clustered faults or weaker media; same LRP guarantee + higher RX headroom.
 
 - Scrub regularly
@@ -111,8 +111,8 @@ Best Practices (Recommended)
 
 - Harden after clean verifies or repairs
   - Run `amber harden` only once `amber verify` passes (the command rechecks internally and aborts on dirty archives).
-  - If you see any repair events, add +1–2% RX to restore safety margins.
-  - Command: `amber harden out.amber --extra-ppm 20000`
+  - If you see any repair events, add +1-3% RX to restore safety margins.
+  - Command: `amber harden out.amber --extra-ppm 30000`
   - You can harden encrypted archives too: add `--password`.
 
 - Migration and backups
@@ -129,7 +129,7 @@ How Much Corruption Can Be Repaired?
 
 - Symbol size: 64 KiB. Any number of bit/byte flips within one symbol count as one erasure.
 - LRP stripes: k data + 1 parity (default k=16 balanced, k=12 archival). Repairs up to one symbol per stripe (guaranteed).
-- RX parity (default ~2%) repairs ≈2% of symbols per window/archive (high probability), including cases where some stripes lose more than one symbol.
+- RX parity (default ~3%) repairs ≈3% of symbols per window/archive (high probability), including cases where some stripes lose more than one symbol.
 - ECC operates over storage bytes (post‑compression, post‑encryption). Parity records themselves are encrypted when the archive is encrypted.
 
 Troubleshooting
