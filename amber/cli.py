@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import errno
+import shutil
 import argparse
 import json as _json
 import getpass as _getpass
@@ -118,6 +119,7 @@ def _scrub_one(path: str, pw: str | None, do_repair: bool, safe: bool, harden_pp
 
     res: Dict[str, Any] = {"path": path, "status": "unknown", "lrp_fixed": 0, "rx_fixed": 0, "harden_added": 0}
     target = path
+    ok = False
     try:
         with ArchiveReader(path, password=pw) as r:
             ok = r.verify()
@@ -139,11 +141,9 @@ def _scrub_one(path: str, pw: str | None, do_repair: bool, safe: bool, harden_pp
             "Index appears inconsistent or corrupted. "
             "Run 'amber repair --safe' to rebuild the index and attempt recovery."
         )
-        return res
     except (AmberError, OSError, ValueError, RuntimeError, zlib.error) as exc:
         res["status"] = "fail"
         res["message"] = str(exc)
-        return res
 
     if ok:
         res["status"] = "ok"
@@ -154,8 +154,7 @@ def _scrub_one(path: str, pw: str | None, do_repair: bool, safe: bool, harden_pp
 
     if safe:
         base, ext = os.path.splitext(path)
-        target = base + ".repaired"
-        import shutil
+        target = f"{base}.repaired{ext}"
 
         shutil.copy2(path, target)
 
@@ -288,7 +287,7 @@ def cmd_append(archive: str, inputs: list[str], *, password: Optional[str] = Non
         password: Password for encrypted archives.
         ecc_profile: ECC preset for the appended segment.
     """
-    print(" Appending files and rewriting index...", flush=True)
+    print(f" Appending files to {archive} and rewriting index...", flush=True)
     append_to_archive(archive, inputs, password=password, ecc_profile=ecc_profile)
     return True
 
@@ -346,6 +345,7 @@ def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, 
         return meta
 
     for p in inputs:
+        print("Sealing", p)
         if p.is_symlink():
             symlinks.append((p.name, os.readlink(str(p))))
         elif p.is_dir():
@@ -423,9 +423,9 @@ def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, 
     if profile == "lean":
         lrp_pct, rx_pct, total_pct = 0.0, 2.0, 2.0
     elif profile == "archival":
-        lrp_pct, rx_pct, total_pct = (100.0/12.0), 4.0, (100.0/12.0)+4.0
+        lrp_pct, rx_pct, total_pct = (100.0/12.0), 5.0, (100.0/12.0)+5.0
     else:  # balanced
-        lrp_pct, rx_pct, total_pct = (100.0/16.0), 2.0, (100.0/16.0)+2.0
+        lrp_pct, rx_pct, total_pct = (100.0/16.0), 3.0, (100.0/16.0)+3.0
 
     print(
         f"Done: {n_files} files, {unique_dirs} dirs, {n_links} links; "
@@ -487,6 +487,7 @@ def cmd_unseal(archive: str, *, outdir: str = ".", password: Optional[str] = Non
 
     from amber.pathutil import norm_path
 
+    print("Unsealing", archive)
     try:
         with ArchiveReader(archive, password=password) as r:
             entries = r.list()
@@ -676,6 +677,7 @@ def cmd_verify(archive: str, *, password: Optional[str] = None) -> bool:
     Prints:
         "OK" on success, "FAIL" on mismatch or errors.
     """
+    print("Verifying", archive)
     try:
         with ArchiveReader(archive, password=password) as r:
             if r.anchor_fail_count > 0:
@@ -712,7 +714,6 @@ def cmd_repair(archive: str, *, password: Optional[str] = None, safe: bool = Fal
         safe: When True, write a repaired copy and leave source unchanged.
         output: Optional repaired copy path; implies safe if provided.
     """
-    import shutil
     src = archive
     dst = None
     if output:
@@ -723,7 +724,7 @@ def cmd_repair(archive: str, *, password: Optional[str] = None, safe: bool = Fal
         if not dst:
             base = os.path.basename(src)
             root, ext = os.path.splitext(base)
-            dst = os.path.join(os.path.dirname(src), f"{root}.repaired")
+            dst = os.path.join(os.path.dirname(src), f"{root}.repaired{ext}")
         shutil.copy2(src, dst)
         target = dst
     else:
@@ -797,23 +798,25 @@ def cmd_rebuild(archive: str, *, password: Optional[str] = None) -> bool:
     Prints:
         The backup path written during the swap.
     """
+    print("Rebulding", archive)
     backup_path = rebuild_archive(archive, password=password)
     print(f"Rebuilt archive committed. Backup written to: {backup_path}")
     return True
 
 
-def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] = None, ecc_profile: Optional[str] = None) -> bool:
+def cmd_harden(archive: str, *, extra_ppm: int = 30000, password: Optional[str] = None, ecc_profile: Optional[str] = None) -> bool:
     """Verify an archive and append extra RX parity to its latest ECC group.
 
     Args:
         archive: Path to the .amber file.
-        extra_ppm: RX parity density to append in ppm (e.g., 20000 = 2%). Applies to the
+        extra_ppm: RX parity density to append in ppm (e.g., 30000 = 3%). Applies to the
             archive’s latest ECC group across all of its data symbols; does not rewrite
             existing file data or earlier ECC groups.
         password: Password for encrypted archives.
         ecc_profile: Optional profile ("lean"/"balanced"/"archival") to select amount;
             overrides extra_ppm.
     """
+    print("Hardening", archive)
     try:
         with ArchiveReader(archive, password=password) as r:
             if not r.verify():
@@ -825,9 +828,9 @@ def cmd_harden(archive: str, *, extra_ppm: int = 20000, password: Optional[str] 
         if ecc_profile == "lean":
             extra = 20000
         elif ecc_profile == "balanced":
-            extra = 20000
+            extra = 30000
         elif ecc_profile == "archival":
-            extra = 40000
+            extra = 50000
     pct = extra / 10000.0
     print(f" Appending ~{pct:.2f}% RX parity and rewriting index...", flush=True)
     added = append_rx_parity(archive, extra_ppm=extra, password=password)
@@ -880,8 +883,8 @@ def main(argv: List[str] | None = None):
         choices=["lean", "balanced", "archival"],
         default="balanced",
         help=(
-            "ECC profile (lean: ~2% RX; balanced: ~8.25% = LRP 6.25% + RX 2%; "
-            "archival: ~12.3% = LRP 8.3% + RX 4%)"
+            "ECC profile (lean: ~2% RX; balanced: ~9.25% = LRP 6.25% + RX 3%; "
+            "archival: ~13.3% = LRP 8.3% + RX 5%)"
         ),
     )
 
@@ -931,13 +934,13 @@ def main(argv: List[str] | None = None):
 
     ap_harden = sub.add_parser("harden", help="Append additional RX parity (verification runs first)")
     ap_harden.add_argument("archive", help="Archive path")
-    ap_harden.add_argument("--extra-ppm", type=int, default=20000, help="Extra parity overhead in ppm (default 20000 = 2%). Verification runs first and the command aborts if the archive is dirty.")
+    ap_harden.add_argument("--extra-ppm", type=int, default=30000, help="Extra parity overhead in ppm (default 30000 = 3%). Verification runs first and the command aborts if the archive is dirty.")
     ap_harden.add_argument("--password", help="Archive password")
     ap_harden.add_argument(
         "--ecc-profile",
         choices=["lean", "balanced", "archival"],
         help=(
-            "Profile to select extra parity (lean: +2%; balanced: +2%; archival: +4%) "
+            "Profile to select extra parity (lean: +2%; balanced: +3%; archival: +5%) "
             "— overrides --extra-ppm"
         ),
     )
