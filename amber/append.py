@@ -166,9 +166,9 @@ def append_to_archive(archive_path: str, inputs: List[str], *, password: Optiona
         elif profile == "archival":
             lrp_enabled = True
             lrp_k = 12
-            rx_epsilon_ppm = 40000
+            rx_epsilon_ppm = 50000
         else:
-            rx_epsilon_ppm = 20000
+            rx_epsilon_ppm = 30000
         next_symbol_index = 0
         if r.symbols:
             next_symbol_index = max(s.symbol_index for s in r.symbols) + 1
