@@ -194,23 +194,23 @@ class ArchiveWriter:
         self.symbol_data: Dict[int, bytes] = {}
         self.rx_seed_base = os.urandom(16)
         # ECC configuration (defaults to 'balanced')
-        # Profiles: lean -> no LRP, RX≈2–3%; balanced -> LRP 1/16 + RX 3%; archival -> LRP 1/12 + RX 5%
+        # Profiles: lean -> no LRP, RX≈4; balanced -> LRP 1/16 + RX 11%; archival -> LRP 1/12 + RX 17%
         profile = (ecc_profile or "balanced").lower()
         if profile == "lean":
             self.lrp_enabled = False if lrp_enabled is None else lrp_enabled
             if lrp_k is not None:
                 self.lrp_k = lrp_k
-            self.rx_epsilon_ppm = 20000 if rx_epsilon_ppm is None else rx_epsilon_ppm
+            self.rx_epsilon_ppm = 40000 if rx_epsilon_ppm is None else rx_epsilon_ppm
         elif profile == "archival":
             self.lrp_enabled = True if lrp_enabled is None else lrp_enabled
             self.lrp_k = 12 if lrp_k is None else lrp_k
-            self.rx_epsilon_ppm = 50000 if rx_epsilon_ppm is None else rx_epsilon_ppm
+            self.rx_epsilon_ppm = 170000 if rx_epsilon_ppm is None else rx_epsilon_ppm
         else:  # balanced (default)
             if lrp_enabled is not None:
                 self.lrp_enabled = lrp_enabled
             if lrp_k is not None:
                 self.lrp_k = lrp_k
-            self.rx_epsilon_ppm = 30000 if rx_epsilon_ppm is None else rx_epsilon_ppm
+            self.rx_epsilon_ppm = 110000 if rx_epsilon_ppm is None else rx_epsilon_ppm
         self.rx_parities: List[RXParityInfo] = []
         self.anchors: List[Dict[str, int]] = []
         # Periodic anchors
