@@ -43,7 +43,7 @@ Quick Start
 - Attempt repair (in-place metadata rebuild + ECC fix)
   - `amber repair out.amber`
 - Append extra parity (harden)
-  - Default is balanced (+3% RX): `amber harden out.amber`
+  - Default is balanced (+11% RX): `amber harden out.amber`
   - Explicit amount: `amber harden out.amber --extra-ppm 20000`
   - Harden refuses to run unless the archive verifies clean; make sure `amber verify` (and `amber repair`) succeed first.
 
@@ -94,14 +94,14 @@ Best Practices (Recommended)
   - Maintain at least two independent copies (separate disk/site). One copy + parity is better than nothing, but two copies is the baseline for long‑term retention.
 
 - Choose a parity profile (storage overhead → resilience)
-  - Lean: RX ~2% (no LRP)
-    - Overhead: ≈2%
+  - Lean: RX ~4% (no LRP)
+    - Overhead: ≈4%
     - SLO: high‑probability repair of scattered random symbol losses up to ~ε per window; rely on a second copy for belt‑and‑suspenders.
-  - Balanced: LRP 1/16 (~6.25%) + RX 3% (≈9.25% total)
-    - Overhead: ≈9.25%
+  - Balanced: LRP 1/16 (~6.25%) + RX 11% (≈17.25% total)
+    - Overhead: ≈17.25%
     - SLO: guaranteed 1‑symbol repair per stripe (LRP); plus high‑probability recovery of additional scattered losses (RX).
-  - Archival: LRP 1/12 (~8.3%) + RX 5% (≈13.3% total)
-    - Overhead: ≈13.3%
+  - Archival: LRP 1/12 (~8.3%) + RX 17% (≈25.3% total)
+    - Overhead: ≈25.3%
     - SLO: stronger margin for clustered faults or weaker media; same LRP guarantee + higher RX headroom.
 
 - Scrub regularly
@@ -129,7 +129,7 @@ How Much Corruption Can Be Repaired?
 
 - Symbol size: 64 KiB. Any number of bit/byte flips within one symbol count as one erasure.
 - LRP stripes: k data + 1 parity (default k=16 balanced, k=12 archival). Repairs up to one symbol per stripe (guaranteed).
-- RX parity (default ~3%) repairs ≈3% of symbols per window/archive (high probability), including cases where some stripes lose more than one symbol.
+- RX parity (default ~17%) repairs ≈17% of symbols per window/archive (high probability), including cases where some stripes lose more than one symbol.
 - ECC operates over storage bytes (post‑compression, post‑encryption). Parity records themselves are encrypted when the archive is encrypted.
 
 Troubleshooting
