@@ -871,18 +871,18 @@ def main(argv: List[str] | None = None):
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     # seal
-    ap_create = sub.add_parser("seal", help="Seal archive")
-    ap_create.add_argument("output", help="Output .amber path")
-    ap_create.add_argument("inputs", nargs="+", help="Input files/directories")
-    ap_create.add_argument("--password", help="Encryption password")
-    ap_create.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
-    ap_create.add_argument(
+    ap_seal = sub.add_parser("seal", help="Seal archive")
+    ap_seal.add_argument("output", help="Output .amber path")
+    ap_seal.add_argument("inputs", nargs="+", help="Input files/directories")
+    ap_seal.add_argument("--password", help="Encryption password")
+    ap_seal.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
+    ap_seal.add_argument(
         "--ecc-profile",
         choices=["lean", "balanced", "archival"],
         default="balanced",
         help=(
-            "ECC profile (lean: ~4% RX; balanced: ~17.25% = LRP 6.25% + RX 11%; "
-            "archival: ~25.3% = LRP 8.3% + RX 17%)"
+            "ECC profile (lean: ~4%% RX; balanced: ~17.25%% = LRP 6.25%% + RX 11%%; "
+            "archival: ~25.3%% = LRP 8.3%% + RX 17%%)"
         ),
     )
 
@@ -895,13 +895,13 @@ def main(argv: List[str] | None = None):
     ap_info.add_argument("--password", help="Archive password")
 
     # unseal
-    ap_extract = sub.add_parser("unseal", help="Unseal files")
-    ap_extract.add_argument("archive", help="Archive path")
-    ap_extract.add_argument("--outdir", default=".", help="Output directory")
-    ap_extract.add_argument("--password", help="Archive password")
-    ap_extract.add_argument("paths", nargs="*", help="Specific archive paths to extract (files or directories)")
-    ap_extract.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
-    ap_extract.add_argument(
+    ap_unseal = sub.add_parser("unseal", help="Unseal files")
+    ap_unseal.add_argument("archive", help="Archive path")
+    ap_unseal.add_argument("--outdir", default=".", help="Output directory")
+    ap_unseal.add_argument("--password", help="Archive password")
+    ap_unseal.add_argument("paths", nargs="*", help="Specific archive paths to extract (files or directories)")
+    ap_unseal.add_argument("--quiet", help="limit outputs to summaries only", action="store_true")
+    ap_unseal.add_argument(
         "--exists",
         choices=["overwrite", "skip", "rename", "fail"],
         default="rename",
