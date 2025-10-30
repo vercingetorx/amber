@@ -147,4 +147,4 @@ Append model and anchors
 
 Notes:
 
-- drives can still fail, filesystems themselves can become corrupt. this archive is not a replacement for keeping multiple copies of important files.
+- Drives can still fail, filesystems themselves can become corrupt. This archive is not a replacement for keeping multiple copies of important files.
