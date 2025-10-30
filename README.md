@@ -118,13 +118,6 @@ Best Practices (Recommended)
 - Migration and backups
   - After moving archives to new media, run `verify` and consider `harden` to refresh parity margins.
 
-What “Start Lean, Append Later” Means
-
-- Begin with a small but meaningful RX budget (e.g., 2–3%).
-- As media ages or after any repair event, append +1–3% parity.
-- Appending writes parity and a refreshed index; the original payload is not rewritten.
-- Never append parity on a dirty (unrepaired) archive.
-
 How Much Corruption Can Be Repaired?
 
 - Symbol size: 64 KiB. Any number of bit/byte flips within one symbol count as one erasure.
