@@ -144,3 +144,7 @@ Append model and anchors
 - A new ECC group is created for appended symbols; previous groups remain immutable.
 - Anchors are periodic records carrying a small rolling window of ECC symbol metadata and the current Merkle root to enable recovery if the trailer is lost.
 - Finalization writes fresh dual index frames and locators; anchors are also emitted periodically during large writes (default interval: 64 MiB of data symbols).
+
+Notes:
+
+- drives can still fail, filesystems themselves can become corrupt. this archive is not a replacement for keeping multiple copies of important files.
