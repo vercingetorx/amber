@@ -149,11 +149,11 @@ Open Questions and Future Work
 Presets and SLOs (Operational)
 
 - lean
-  - Overhead: ≈2% (RX only)
+  - Overhead: ≈4% (RX only)
   - SLO: high‑probability recovery of up to ~ε scattered symbol erasures per window; pair with a second copy.
 - balanced (default)
-  - Overhead: ≈8.25% (LRP 1/16 + RX 2%)
+  - Overhead: ≈17.25% (LRP 1/16 + RX 11%)
   - SLO: guaranteed single‑symbol repair per stripe via LRP; RX covers additional scattered losses with high probability.
 - archival
-  - Overhead: ≈12.3% (LRP 1/12 + RX 4%)
+  - Overhead: ≈25.3% (LRP 1/12 + RX 17%)
   - SLO: additional margin for clustered damage/weaker media; LRP guarantee plus larger RX headroom.
