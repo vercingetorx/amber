@@ -829,17 +829,9 @@ def cmd_harden(archive: str, *, extra_ppm: int = 30000, password: Optional[str] 
                 raise RuntimeError("Verification failed; run amber repair before hardening.")
     except (AmberError, OSError, ValueError, RuntimeError, zlib.error) as exc:
         raise RuntimeError(f"Verification failed before harden: {exc}")
-    extra = extra_ppm
-    if ecc_profile:
-        if ecc_profile == "lean":
-            extra = 20000
-        elif ecc_profile == "balanced":
-            extra = 30000
-        elif ecc_profile == "archival":
-            extra = 50000
-    pct = extra / 10000.0
+    pct = extra_ppm / 10000.0
     print(f" Appending ~{pct:.2f}% RX parity and rewriting index...", flush=True)
-    added = append_rx_parity(archive, extra_ppm=extra, password=password)
+    added = append_rx_parity(archive, extra_ppm=extra_ppm, password=password)
     print(f"Appended {added} RX parity symbol(s)")
     return True
 
@@ -889,8 +881,8 @@ def main(argv: List[str] | None = None):
         choices=["lean", "balanced", "archival"],
         default="balanced",
         help=(
-            "ECC profile (lean: ~2% RX; balanced: ~9.25% = LRP 6.25% + RX 3%; "
-            "archival: ~13.3% = LRP 8.3% + RX 5%)"
+            "ECC profile (lean: ~4% RX; balanced: ~17.25% = LRP 6.25% + RX 11%; "
+            "archival: ~25.3% = LRP 8.3% + RX 17%)"
         ),
     )
 
@@ -942,14 +934,6 @@ def main(argv: List[str] | None = None):
     ap_harden.add_argument("archive", help="Archive path")
     ap_harden.add_argument("--extra-ppm", type=int, default=30000, help="Extra parity overhead in ppm (default 30000 = 3%). Verification runs first and the command aborts if the archive is dirty.")
     ap_harden.add_argument("--password", help="Archive password")
-    ap_harden.add_argument(
-        "--ecc-profile",
-        choices=["lean", "balanced", "archival"],
-        help=(
-            "Profile to select extra parity (lean: +2%; balanced: +3%; archival: +5%) "
-            "— overrides --extra-ppm"
-        ),
-    )
 
     ap_append = sub.add_parser("append", help="Append files to an existing archive (safe append segment)")
     ap_append.add_argument("archive", help="Archive path")
@@ -993,7 +977,7 @@ def main(argv: List[str] | None = None):
         elif args.cmd == "rebuild":
             cmd_rebuild(args.archive, password=args.password)
         elif args.cmd == "harden":
-            cmd_harden(args.archive, extra_ppm=args.extra_ppm, password=args.password, ecc_profile=args.ecc_profile)
+            cmd_harden(args.archive, extra_ppm=args.extra_ppm, password=args.password)
         elif args.cmd == "append":
             cmd_append(args.archive, args.inputs, password=args.password, ecc_profile=args.ecc_profile)
         elif args.cmd == "scrub":
