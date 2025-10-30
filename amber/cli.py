@@ -427,11 +427,11 @@ def cmd_seal(output: str, inputs: list[str], *, password: Optional[str] = None, 
     mbps = mib / dt
     profile = ecc_profile or "balanced"
     if profile == "lean":
-        lrp_pct, rx_pct, total_pct = 0.0, 2.0, 2.0
+        lrp_pct, rx_pct, total_pct = 0.0, 4.0, 4.0
     elif profile == "archival":
-        lrp_pct, rx_pct, total_pct = (100.0/12.0), 5.0, (100.0/12.0)+5.0
+        lrp_pct, rx_pct, total_pct = (100.0/12.0), 17.0, (100.0/12.0)+17.0
     else:  # balanced
-        lrp_pct, rx_pct, total_pct = (100.0/16.0), 3.0, (100.0/16.0)+3.0
+        lrp_pct, rx_pct, total_pct = (100.0/16.0), 11.0, (100.0/16.0)+11.0
 
     print(
         f"Done: {n_files} files, {unique_dirs} dirs, {n_links} links; "
