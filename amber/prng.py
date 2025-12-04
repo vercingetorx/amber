@@ -29,15 +29,25 @@ class DeterministicPRNG:
     def next_uint(self, modulus: int) -> int:
         if modulus <= 0:
             return 0
+        # Fast path for small moduli using 16-bit rejection sampling
+        if modulus <= 0x10000:
+            while True:
+                b1 = self.next_byte()
+                b2 = self.next_byte()
+                value = (b1 << 8) | b2
+                if modulus & (modulus - 1) == 0 and modulus != 0:
+                    return value & (modulus - 1)
+                limit = (1 << 16) - ((1 << 16) % modulus)
+                if value < limit:
+                    return value % modulus
+        # General path for larger moduli using 64-bit rejection sampling
         while True:
-            b1 = self.next_byte()
-            b2 = self.next_byte()
-            value = (b1 << 8) | b2
-            if modulus & (modulus - 1) == 0 and modulus != 0:
-                return value & (modulus - 1)
-            limit = (1 << 16) - ((1 << 16) % modulus)
-            if value < limit:
-                return value % modulus
+            v = 0
+            for _ in range(8):
+                v = (v << 8) | self.next_byte()
+            limit = (1 << 64) - ((1 << 64) % modulus)
+            if v < limit:
+                return v % modulus
 
     def next_nonzero_byte(self) -> int:
         while True:
