@@ -45,7 +45,7 @@ This repository is the Rust reference implementation. It provides:
   - Append, harden, rebuild, and successful repair commit one new canonical archive image.
   - Failed mutations do not leave stale live trailer generations behind.
 - Hard to beat ECC.
-  - In internal benchmarks AMCF-ECC beat both a strengthened interleaved-overlap `Reed-Solomon` and `LRP + RaptorQ-class`.
+  - In internal benchmarks, AMCF-ECC recovered more data in nearly every loss scenario than both a strengthened interleaved-overlap Reed-Solomon design and an LRP + RaptorQ-class approach. Where RS and RX failed catastrophically beyond their recovery limits, AMCF degraded gracefully.
 
 ## Overview
 
