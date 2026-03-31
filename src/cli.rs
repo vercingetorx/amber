@@ -240,7 +240,8 @@ pub fn seal_archive_with_progress(
         }
     };
     let output_fs_path = absolutize_operational_path(&output_path)?;
-    assert_archive_output_path_clear(&output_fs_path, options.part_size.is_some())?;
+    let multipart = options.part_size.is_some();
+    assert_archive_output_path_clear(&output_fs_path, multipart)?;
 
     let scanned = scan_inputs(inputs)?;
     let total_bytes = scanned
@@ -250,63 +251,71 @@ pub fn seal_archive_with_progress(
         .sum::<u64>()
         .max(1);
     let mut processed_bytes = 0u64;
-    let mut writer = ArchiveWriter::new(
-        &output_fs_path,
-        None,
-        if options.compress {
-            Some(CODEC_DEFLATE)
-        } else {
-            None
-        },
-        options.password.as_deref(),
-        options.keyfile.as_deref(),
-        options.part_size,
-        None,
-        None,
-        None,
-        None,
-    )?;
-    writer.open()?;
-    for dir in &scanned.dirs {
-        writer.add_dir(
-            &dir.archive_path,
-            dir.metadata.mode,
-            dir.metadata.mtime_sec,
-            dir.metadata.mtime_nsec,
-            dir.metadata.atime_sec,
-            dir.metadata.atime_nsec,
-        )?;
-    }
-    for symlink in &scanned.symlinks {
-        writer.add_symlink(&symlink.archive_path, &symlink.target)?;
-    }
-    for file in &scanned.files {
-        writer.add_file(
-            &file.archive_path,
-            &file.fs_path,
+    let seal_result = (|| -> AmberResult<SealSummary> {
+        let mut writer = ArchiveWriter::new(
+            &output_fs_path,
+            None,
+            if options.compress {
+                Some(CODEC_DEFLATE)
+            } else {
+                None
+            },
+            options.password.as_deref(),
+            options.keyfile.as_deref(),
+            options.part_size,
             None,
             None,
-            file.metadata.mode,
+            None,
+            None,
         )?;
-        processed_bytes = processed_bytes.saturating_add(file.size);
-        progress(SealProgress::SealingFile {
-            archive_path: file.archive_path.clone(),
-            processed_bytes,
-            total_bytes,
-        });
-    }
-    progress(SealProgress::Finalizing);
-    writer.finalize()?;
-    writer.close();
+        writer.open()?;
+        for dir in &scanned.dirs {
+            writer.add_dir(
+                &dir.archive_path,
+                dir.metadata.mode,
+                dir.metadata.mtime_sec,
+                dir.metadata.mtime_nsec,
+                dir.metadata.atime_sec,
+                dir.metadata.atime_nsec,
+            )?;
+        }
+        for symlink in &scanned.symlinks {
+            writer.add_symlink(&symlink.archive_path, &symlink.target)?;
+        }
+        for file in &scanned.files {
+            writer.add_file(
+                &file.archive_path,
+                &file.fs_path,
+                None,
+                None,
+                file.metadata.mode,
+            )?;
+            processed_bytes = processed_bytes.saturating_add(file.size);
+            progress(SealProgress::SealingFile {
+                archive_path: file.archive_path.clone(),
+                processed_bytes,
+                total_bytes,
+            });
+        }
+        progress(SealProgress::Finalizing);
+        writer.finalize()?;
+        writer.close();
 
-    Ok(SealSummary {
-        output_path,
-        file_count: scanned.files.len(),
-        dir_count: scanned.dirs.len(),
-        symlink_count: scanned.symlinks.len(),
-        processed_bytes,
-        multipart: options.part_size.is_some(),
-    })
+        Ok(SealSummary {
+            output_path,
+            file_count: scanned.files.len(),
+            dir_count: scanned.dirs.len(),
+            symlink_count: scanned.symlinks.len(),
+            processed_bytes,
+            multipart,
+        })
+    })();
+
+    if seal_result.is_err() {
+        cleanup_failed_fresh_archive_write(&output_fs_path, multipart)?;
+    }
+
+    seal_result
 }
 
 fn absolutize_operational_path(path: &Path) -> AmberResult<PathBuf> {
@@ -314,6 +323,30 @@ fn absolutize_operational_path(path: &Path) -> AmberResult<PathBuf> {
         return Ok(path.to_path_buf());
     }
     Ok(std::env::current_dir()?.join(path))
+}
+
+fn cleanup_failed_fresh_archive_write(base_path: &Path, multipart: bool) -> AmberResult<()> {
+    if multipart {
+        let segment_paths = match discover_archive_segment_paths(base_path) {
+            Ok(paths) => paths,
+            Err(AmberError::NotFound(_)) => Vec::new(),
+            Err(err) => return Err(err),
+        };
+        for segment_path in segment_paths {
+            match fs::remove_file(&segment_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    } else {
+        match fs::remove_file(base_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
 }
 
 pub fn list_archive(

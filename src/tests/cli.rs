@@ -121,6 +121,48 @@
     }
 
     #[test]
+    fn failed_multipart_seal_cleans_up_partial_archive_set() {
+        let tmp = tempdir();
+        let input = tmp.join("blue47.mp4");
+        let archive = tmp.join("blue47.mp4.amber");
+        fs::write(&input, vec![0x5Au8; 400_000]).unwrap();
+
+        let err = seal_archive(
+            &[&input],
+            &SealOptions {
+                output: Some(archive.clone()),
+                password: None,
+                keyfile: None,
+                compress: false,
+                part_size: Some(250 * 1024),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("record exceeds configured multipart segment size")
+        );
+        assert!(!archive.exists());
+        assert!(!tmp.join("blue47.mp4.amber.001").exists());
+        assert!(!tmp.join("blue47.mp4.amber.002").exists());
+
+        seal_archive(
+            &[&input],
+            &SealOptions {
+                output: Some(archive.clone()),
+                password: None,
+                keyfile: None,
+                compress: false,
+                part_size: Some(300 * 1024),
+            },
+        )
+        .unwrap();
+        assert!(tmp.join("blue47.mp4.amber.001").exists());
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
     fn list_archive_accepts_relative_archive_path_from_cwd() {
         let tmp = tempdir();
         let cwd = std::env::current_dir().unwrap();
