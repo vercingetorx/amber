@@ -44,6 +44,8 @@ This repository is the Rust reference implementation. It provides:
 - Canonical mutations.
   - Append, harden, rebuild, and successful repair commit one new canonical archive image.
   - Failed mutations do not leave stale live trailer generations behind.
+- Hard to beat ECC.
+  - In internal benchmarks AMCF-ECC beat both a strengthened interleaved-overlap `Reed-Solomon` and `LRP + RaptorQ-class`.
 
 ## Overview
 
