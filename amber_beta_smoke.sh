@@ -110,28 +110,14 @@ run_amber append "$ENC_ARCHIVE" "$WORKDIR/add2.txt" --password "$PASS" --keyfile
 run_amber harden "$ENC_ARCHIVE" --extra-parity-percent 0.5 --password "$PASS" --keyfile "$KEYFILE"
 expect_verify_ok "$ENC_ARCHIVE" --password "$PASS" --keyfile "$KEYFILE"
 
-echo "==> Chunk corruption + repair (compressed archive)"
-run_amber corrupt random-chunks --count 2 --seed 13 "$COMP_ARCHIVE"
-expect_verify_fail "$COMP_ARCHIVE"
-run_amber repair "$COMP_ARCHIVE"
-expect_verify_ok "$COMP_ARCHIVE"
-
-echo "==> Chunk corruption + safe repair (encrypted archive)"
-run_amber corrupt random-chunks --count 1 --seed 19 --password "$PASS" --keyfile "$KEYFILE" "$ENC_ARCHIVE"
-expect_verify_fail "$ENC_ARCHIVE" --password "$PASS" --keyfile "$KEYFILE"
-run_amber repair "$ENC_ARCHIVE" --safe --password "$PASS" --keyfile "$KEYFILE"
-ENC_REPAIRED="$WORKDIR/encrypted.repaired.amber"
-[[ -f "$ENC_REPAIRED" ]] || fail "expected repaired encrypted copy at $ENC_REPAIRED"
-expect_verify_ok "$ENC_REPAIRED" --password "$PASS" --keyfile "$KEYFILE"
-
 echo "==> Rebuild + verify"
 run_amber rebuild "$PLAIN_ARCHIVE"
 expect_verify_ok "$PLAIN_ARCHIVE"
-run_amber rebuild "$ENC_REPAIRED" --password "$PASS" --keyfile "$KEYFILE"
-expect_verify_ok "$ENC_REPAIRED" --password "$PASS" --keyfile "$KEYFILE"
+run_amber rebuild "$ENC_ARCHIVE" --password "$PASS" --keyfile "$KEYFILE"
+expect_verify_ok "$ENC_ARCHIVE" --password "$PASS" --keyfile "$KEYFILE"
 
 echo "==> Scrub"
-run_amber scrub "$PLAIN_ARCHIVE" "$COMP_ARCHIVE" "$ENC_REPAIRED" --json --password "$PASS" --keyfile "$KEYFILE"
+run_amber scrub "$PLAIN_ARCHIVE" "$COMP_ARCHIVE" "$ENC_ARCHIVE" --json --password "$PASS" --keyfile "$KEYFILE"
 
 echo "==> Wrong-credential sanity checks"
 expect_verify_locked "$ENC_ARCHIVE" --password wrong --keyfile "$KEYFILE"

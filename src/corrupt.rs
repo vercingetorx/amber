@@ -305,3 +305,7 @@ impl XorShift64 {
         x
     }
 }
+
+#[cfg(test)]
+#[path = "tests/corrupt.rs"]
+mod tests;

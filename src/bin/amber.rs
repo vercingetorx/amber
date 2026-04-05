@@ -9,10 +9,6 @@ use amber::cli::{
     seal_archive_with_progress, unseal_archive_with_progress, verify_archive,
 };
 use amber::harden::append_amcf_parity;
-use amber::corrupt::{
-    corrupt_by_offset, corrupt_chunk_window, corrupt_first_symbol, corrupt_random_chunks,
-    corrupt_symbol,
-};
 use clap::{Parser, Subcommand};
 use std::time::Instant;
 
@@ -134,71 +130,6 @@ enum Command {
         quiet: bool,
         #[arg(required = true)]
         paths: Vec<PathBuf>,
-    },
-    Corrupt {
-        #[command(subcommand)]
-        command: CorruptCommand,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum CorruptCommand {
-    RandomChunks {
-        #[arg(long, default_value_t = 1)]
-        count: usize,
-        #[arg(long)]
-        seed: Option<u64>,
-        #[arg(long, default_value_t = 10)]
-        within: u64,
-        #[arg(long)]
-        include_parity: bool,
-        #[arg(long)]
-        password: Option<String>,
-        #[arg(long)]
-        keyfile: Option<PathBuf>,
-        archive: PathBuf,
-    },
-    ChunkWindow {
-        #[arg(long)]
-        start: usize,
-        #[arg(long)]
-        count: usize,
-        #[arg(long, default_value_t = 10)]
-        within: u64,
-        #[arg(long)]
-        include_parity: bool,
-        #[arg(long)]
-        password: Option<String>,
-        #[arg(long)]
-        keyfile: Option<PathBuf>,
-        archive: PathBuf,
-    },
-    ByOffset {
-        offset: u64,
-        archive: PathBuf,
-    },
-    FirstSymbol {
-        #[arg(long, default_value_t = 10)]
-        within: u64,
-        #[arg(long)]
-        include_parity: bool,
-        #[arg(long)]
-        password: Option<String>,
-        #[arg(long)]
-        keyfile: Option<PathBuf>,
-        archive: PathBuf,
-    },
-    Symbol {
-        index: usize,
-        #[arg(long, default_value_t = 10)]
-        within: u64,
-        #[arg(long)]
-        include_parity: bool,
-        #[arg(long)]
-        password: Option<String>,
-        #[arg(long)]
-        keyfile: Option<PathBuf>,
-        archive: PathBuf,
     },
 }
 
@@ -643,77 +574,6 @@ fn run(args: Args) -> Result<i32, AmberError> {
                 println!("{}", format_scrub_summary(&summary, quiet));
             }
             Ok(if summary.failed == 0 { 0 } else { 1 })
-        }
-        Command::Corrupt { command } => {
-            let result = match command {
-                CorruptCommand::RandomChunks {
-                    count,
-                    seed,
-                    within,
-                    include_parity,
-                    password,
-                    keyfile,
-                    archive,
-                } => corrupt_random_chunks(
-                    &archive,
-                    count,
-                    seed,
-                    within,
-                    include_parity,
-                    password.as_deref(),
-                    keyfile.as_deref(),
-                )?,
-                CorruptCommand::ChunkWindow {
-                    start,
-                    count,
-                    within,
-                    include_parity,
-                    password,
-                    keyfile,
-                    archive,
-                } => corrupt_chunk_window(
-                    &archive,
-                    start,
-                    count,
-                    within,
-                    include_parity,
-                    password.as_deref(),
-                    keyfile.as_deref(),
-                )?,
-                CorruptCommand::ByOffset { offset, archive } => {
-                    corrupt_by_offset(&archive, offset)?
-                }
-                CorruptCommand::FirstSymbol {
-                    within,
-                    include_parity,
-                    password,
-                    keyfile,
-                    archive,
-                } => corrupt_first_symbol(
-                    &archive,
-                    within,
-                    include_parity,
-                    password.as_deref(),
-                    keyfile.as_deref(),
-                )?,
-                CorruptCommand::Symbol {
-                    index,
-                    within,
-                    include_parity,
-                    password,
-                    keyfile,
-                    archive,
-                } => corrupt_symbol(
-                    &archive,
-                    index,
-                    within,
-                    include_parity,
-                    password.as_deref(),
-                    keyfile.as_deref(),
-                )?,
-            };
-            println!("{}", result.message);
-            Ok(0)
         }
     }
 }

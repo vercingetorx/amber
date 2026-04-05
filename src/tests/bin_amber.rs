@@ -5,18 +5,16 @@
 
     use amber::AmberError;
     use amber::archiveio::LogicalArchiveReader;
-    use amber::constants::CODEC_NONE;
     use amber::cli::SealOptions;
     use amber::cli::seal_archive;
+    use amber::corrupt::corrupt_random_chunks;
     use amber::reader::ArchiveReader;
     use amber::repair::ECCRepairResult;
-    use amber::repair::detect_corrupted_symbols;
-    use amber::writer::ArchiveWriter;
     use clap::Parser;
 
     use super::{
-        Args, Command, CorruptCommand, format_repair_report, parse_extra_parity_percent,
-        render_generic_error, rewrite_verify_error, run,
+        Args, Command, format_repair_report, parse_extra_parity_percent, render_generic_error,
+        rewrite_verify_error, run,
     };
 
     fn tempdir() -> std::path::PathBuf {
@@ -367,145 +365,6 @@
     }
 
     #[test]
-    fn corrupt_random_chunks_flips_selected_data_chunks() {
-        let tmp = tempdir();
-        let archive = tmp.join("sample.amber");
-        let data = tmp.join("data.bin");
-        fs::write(&data, vec![b'A'; 65_536 * 3]).unwrap();
-        let mut writer = ArchiveWriter::new(
-            &archive, None, None, None, None, None, None, None, None, Some(0),
-        )
-        .unwrap();
-        writer.open().unwrap();
-        writer
-            .add_file("data.bin", &data, Some(CODEC_NONE), Some(65_536), None)
-            .unwrap();
-        writer.finalize().unwrap();
-        writer.close();
-
-        let rc = run(Args {
-            command: Command::Corrupt {
-                command: CorruptCommand::RandomChunks {
-                    count: 2,
-                    seed: Some(7),
-                    within: 10,
-                    include_parity: false,
-                    password: None,
-                    keyfile: None,
-                    archive: archive.clone(),
-                },
-            },
-        })
-        .unwrap();
-        assert_eq!(rc, 0);
-
-        let mut reader = ArchiveReader::new(&archive);
-        reader.open().unwrap();
-        let mut fh = LogicalArchiveReader::open_path(&archive).unwrap();
-        let corrupted = detect_corrupted_symbols(&reader, &mut fh).unwrap();
-        assert_eq!(corrupted.len(), 2);
-
-        let _ = fs::remove_dir_all(tmp);
-    }
-
-    #[test]
-    fn corrupt_chunk_window_flips_contiguous_chunks() {
-        let tmp = tempdir();
-        let archive = tmp.join("sample.amber");
-        let data = tmp.join("data.bin");
-        fs::write(&data, vec![b'B'; 65_536 * 4]).unwrap();
-        let mut writer = ArchiveWriter::new(
-            &archive, None, None, None, None, None, None, None, None, Some(0),
-        )
-        .unwrap();
-        writer.open().unwrap();
-        writer
-            .add_file("data.bin", &data, Some(CODEC_NONE), Some(65_536), None)
-            .unwrap();
-        writer.finalize().unwrap();
-        writer.close();
-
-        let rc = run(Args {
-            command: Command::Corrupt {
-                command: CorruptCommand::ChunkWindow {
-                    start: 1,
-                    count: 2,
-                    within: 10,
-                    include_parity: false,
-                    password: None,
-                    keyfile: None,
-                    archive: archive.clone(),
-                },
-            },
-        })
-        .unwrap();
-        assert_eq!(rc, 0);
-
-        let mut reader = ArchiveReader::new(&archive);
-        reader.open().unwrap();
-        let mut fh = LogicalArchiveReader::open_path(&archive).unwrap();
-        let corrupted = detect_corrupted_symbols(&reader, &mut fh)
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(corrupted, vec![1, 2]);
-
-        let _ = fs::remove_dir_all(tmp);
-    }
-
-    #[test]
-    fn corrupt_random_chunks_supports_multipart_archive() {
-        let tmp = tempdir();
-        let archive = tmp.join("sample.amber");
-        let data = tmp.join("data.bin");
-        fs::write(&data, vec![b'D'; 65_536 * 8]).unwrap();
-        let mut writer = ArchiveWriter::new(
-            &archive,
-            None,
-            None,
-            None,
-            None,
-            Some(120_000),
-            None,
-            None,
-            None,
-            Some(0),
-        )
-        .unwrap();
-        writer.open().unwrap();
-        writer
-            .add_file("data.bin", &data, Some(CODEC_NONE), Some(65_536), None)
-            .unwrap();
-        writer.finalize().unwrap();
-        writer.close();
-
-        let seg2 = PathBuf::from(format!("{}.002", archive.display()));
-        let rc = run(Args {
-            command: Command::Corrupt {
-                command: CorruptCommand::RandomChunks {
-                    count: 2,
-                    seed: Some(5),
-                    within: 10,
-                    include_parity: false,
-                    password: None,
-                    keyfile: None,
-                    archive: seg2.clone(),
-                },
-            },
-        })
-        .unwrap();
-        assert_eq!(rc, 0);
-
-        let mut reader = ArchiveReader::new(&seg2);
-        reader.open().unwrap();
-        let mut fh = LogicalArchiveReader::open_path(&seg2).unwrap();
-        let corrupted = detect_corrupted_symbols(&reader, &mut fh).unwrap();
-        assert_eq!(corrupted.len(), 2);
-
-        let _ = fs::remove_dir_all(tmp);
-    }
-
-    #[test]
     fn verify_rejects_multipart_segment_gap() {
         let tmp = tempdir();
         let src = tmp.join("src");
@@ -760,21 +619,7 @@
         let archive = tmp.join("compressed.amber");
         build_tree_archive(&tmp, &archive, true, None);
 
-        let rc = run(Args {
-            command: Command::Corrupt {
-                command: CorruptCommand::RandomChunks {
-                    count: 2,
-                    seed: Some(13),
-                    within: 10,
-                    include_parity: false,
-                    password: None,
-                    keyfile: None,
-                    archive: archive.clone(),
-                },
-            },
-        })
-        .unwrap();
-        assert_eq!(rc, 0);
+        corrupt_random_chunks(&archive, 2, Some(13), 10, false, None, None).unwrap();
 
         let verify_dirty = run(Args {
             command: Command::Verify {
