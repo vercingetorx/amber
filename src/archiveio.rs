@@ -6,6 +6,8 @@ use crate::error::{AmberError, AmberResult};
 use crate::records::RecordWriteTarget;
 use crate::superblock::{SUPERBLOCK_SIZE, read_superblock};
 
+pub const MIN_MULTIPART_PART_SIZE: u64 = SUPERBLOCK_SIZE as u64 + 1;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArchiveSegment {
     pub path: PathBuf,
@@ -113,6 +115,15 @@ pub fn parent_dir_or_dot(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
+}
+
+fn validate_multipart_part_size(part_size: u64) -> AmberResult<()> {
+    if part_size < MIN_MULTIPART_PART_SIZE {
+        return Err(AmberError::Invalid(format!(
+            "multipart part_size must be at least {MIN_MULTIPART_PART_SIZE} bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_segment_path(path: &Path) -> Option<(PathBuf, u32)> {
@@ -287,7 +298,10 @@ impl LogicalArchiveReader {
                     archive_uuid = Some(superblock.uuid);
                     multipart_part_size = match superblock.multipart_part_size {
                         0 => None,
-                        value => Some(value),
+                        value => {
+                            validate_multipart_part_size(value)?;
+                            Some(value)
+                        }
                     };
                 }
                 Some(uuid) if uuid != superblock.uuid => {
@@ -459,10 +473,8 @@ pub struct LogicalArchiveWriter {
 
 impl LogicalArchiveWriter {
     pub fn new(base_path: &Path, part_size: Option<u64>) -> AmberResult<Self> {
-        if let Some(part_size) = part_size
-            && part_size == 0
-        {
-            return Err(AmberError::Invalid("part_size must be positive".into()));
+        if let Some(part_size) = part_size {
+            validate_multipart_part_size(part_size)?;
         }
         let mut writer = Self {
             base_path: base_path.to_path_buf(),
@@ -590,7 +602,9 @@ impl RecordWriteTarget for LogicalArchiveWriter {
             } else {
                 0
             };
-            let max_record_bytes = part_size - hidden_header;
+            let max_record_bytes = part_size.checked_sub(hidden_header).ok_or_else(|| {
+                AmberError::Invalid("multipart part_size is smaller than segment header".into())
+            })?;
             if length > max_record_bytes {
                 return Err(AmberError::Invalid(
                     "record exceeds configured multipart segment size".into(),
@@ -638,7 +652,10 @@ impl LogicalArchiveAppender {
                     segment_header_bytes = superblock_bytes;
                     multipart_part_size = match superblock.multipart_part_size {
                         0 => None,
-                        value => Some(value),
+                        value => {
+                            validate_multipart_part_size(value)?;
+                            Some(value)
+                        }
                     };
                 }
                 Some(uuid) if uuid != superblock.uuid => {
@@ -799,7 +816,9 @@ impl RecordWriteTarget for LogicalArchiveAppender {
             } else {
                 0
             };
-            let max_record_bytes = part_size - hidden_header;
+            let max_record_bytes = part_size.checked_sub(hidden_header).ok_or_else(|| {
+                AmberError::Invalid("multipart part_size is smaller than segment header".into())
+            })?;
             if length > max_record_bytes {
                 return Err(AmberError::Invalid(
                     "record exceeds configured multipart segment size".into(),

@@ -293,7 +293,12 @@ fn required_segment_count(
     if logical_append_bytes <= remaining_in_last {
         return Ok(current_segments.len());
     }
-    if logical_append_bytes > (part_size - repeated_segment_header_length) {
+    let max_append_bytes = part_size
+        .checked_sub(repeated_segment_header_length)
+        .ok_or_else(|| {
+            AmberError::Invalid("multipart part_size is smaller than segment header".into())
+        })?;
+    if logical_append_bytes > max_append_bytes {
         return Err(AmberError::Invalid(
             "multipart segment size leaves no room for a complete index trailer".into(),
         ));

@@ -7,7 +7,9 @@ use getrandom::fill;
 
 use crate::amcfcompute::iter_parity_payloads;
 use crate::archiveio::LogicalArchiveWriter;
-use crate::chunkemit::{ChunkEmitContext, emit_file_chunks};
+use blake3::Hasher;
+
+use crate::chunkemit::{ChunkEmitContext, ChunkMeta, emit_file_chunks, emit_plain_chunk};
 use crate::constants::{
     CODEC_AMCF_PARITY, CODEC_NONE, DEFAULT_CHUNK_SIZE, DEFAULT_CODEC_ID,
     FLAG_CHUNK_COMPRESS_DEFAULT, FLAG_ECC_PRESENT, FLAG_ENCRYPTED, KDF_ARGON2ID_V2,
@@ -23,7 +25,7 @@ use crate::globalparity::{
 };
 use crate::hashutil::{merkle_leaf_from_chunk_tag, merkle_parent};
 use crate::pathutil::{validate_archive_path, validate_symlink_target};
-use crate::reader::{AmcfParityInfo, ChunkDesc, SymbolInfo};
+use crate::reader::{AmcfParityInfo, ArchiveReader, ChunkDesc, Entry as ReaderEntry, SymbolInfo};
 use crate::records::{build_chunk_header_ext, write_record};
 use crate::superblock::{SuperblockEncryptionParams, pack_superblock};
 use crate::tlv::{TlvMap, TlvValue, dumps_index};
@@ -266,7 +268,7 @@ impl ArchiveWriter {
         let codec_id = codec_id.unwrap_or(self.default_codec);
         let st = std::fs::metadata(fs_path.as_ref())?;
         let entry_id = self.alloc_id();
-        let mut entry = WriterEntry {
+        let entry = WriterEntry {
             entry_id,
             kind: 0,
             path: arc_path,
@@ -283,7 +285,92 @@ impl ArchiveWriter {
             symlink_target: None,
         };
         self.write_entry_begin(&entry)?;
+        let (chunks, file_hash32) = self.with_chunk_emit_context(|ctx| {
+            emit_file_chunks(
+                ctx,
+                entry.entry_id,
+                fs_path.as_ref(),
+                codec_id,
+                chunk_size as usize,
+            )
+        })?;
+        self.finish_file_entry(entry, chunks, file_hash32)?;
+        Ok(())
+    }
 
+    pub fn add_file_from_archive_entry(
+        &mut self,
+        reader: &mut ArchiveReader,
+        source_entry: &ReaderEntry,
+    ) -> AmberResult<()> {
+        if source_entry.kind != 0 {
+            return Err(AmberError::Invalid(
+                "source archive entry is not a file".into(),
+            ));
+        }
+        let arc_path = validate_archive_path(&source_entry.path)?;
+        let codec_id = source_entry
+            .file_codec
+            .map(|value| {
+                u16::try_from(value)
+                    .map_err(|_| AmberError::Invalid("file codec does not fit in u16".into()))
+            })
+            .transpose()?
+            .unwrap_or(self.default_codec);
+        let chunk_size = source_entry
+            .chunk_size
+            .map(|value| {
+                u32::try_from(value)
+                    .map_err(|_| AmberError::Invalid("chunk size does not fit in u32".into()))
+            })
+            .transpose()?
+            .unwrap_or(self.default_chunk_size);
+        let entry_id = self.alloc_id();
+        let entry = WriterEntry {
+            entry_id,
+            kind: 0,
+            path: arc_path,
+            size: source_entry.size,
+            mode: source_entry.mode,
+            mtime_sec: source_entry.mtime_sec,
+            mtime_nsec: source_entry.mtime_nsec,
+            atime_sec: source_entry.atime_sec,
+            atime_nsec: source_entry.atime_nsec,
+            file_codec: Some(codec_id as u64),
+            chunk_size: Some(chunk_size as u64),
+            chunks: Vec::new(),
+            file_hash32: None,
+            symlink_target: None,
+        };
+        self.write_entry_begin(&entry)?;
+
+        let mut chunks = Vec::new();
+        let mut hasher = Hasher::new();
+        self.with_chunk_emit_context(|ctx| {
+            for (index, source_chunk) in source_entry.chunks.iter().enumerate() {
+                let (_source_codec, raw) = reader.read_chunk_plaintext(source_chunk)?;
+                hasher.update(&raw);
+                emit_plain_chunk(
+                    &mut *ctx,
+                    entry.entry_id,
+                    u32::try_from(index)
+                        .map_err(|_| AmberError::Invalid("too many chunks in file".into()))?,
+                    codec_id,
+                    &raw,
+                    &mut chunks,
+                )?;
+            }
+            Ok(())
+        })?;
+        let file_hash32 = *hasher.finalize().as_bytes();
+        self.finish_file_entry(entry, chunks, file_hash32)?;
+        Ok(())
+    }
+
+    fn with_chunk_emit_context<T>(
+        &mut self,
+        emit: impl FnOnce(&mut ChunkEmitContext<'_, LogicalArchiveWriter>) -> AmberResult<T>,
+    ) -> AmberResult<T> {
         let encryptor = self.encryptor.as_ref();
         let prior_entries = self.entries.clone();
         let symbols = &mut self.symbols;
@@ -337,15 +424,17 @@ impl ArchiveWriter {
                 },
             ),
         };
-        let (chunks, file_hash32) = emit_file_chunks(
-            &mut ctx,
-            entry.entry_id,
-            fs_path.as_ref(),
-            codec_id,
-            chunk_size as usize,
-        )?;
+        let result = emit(&mut ctx);
         self.symbol_data = std::mem::take(&mut ctx.symbol_bytes);
-        drop(ctx);
+        result
+    }
+
+    fn finish_file_entry(
+        &mut self,
+        mut entry: WriterEntry,
+        chunks: Vec<ChunkMeta>,
+        file_hash32: [u8; 32],
+    ) -> AmberResult<()> {
         entry.chunks = chunks
             .iter()
             .map(|chunk| ChunkDesc {

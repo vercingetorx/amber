@@ -70,6 +70,12 @@ Build the CLI:
 cargo build --release
 ```
 
+Dependency policy:
+
+- Amber intentionally uses wildcard dependency requirements and commits `Cargo.lock`.
+- Reproducible application builds are lockfile-based.
+- Dependency refreshes are treated as whole-ecosystem updates rather than per-crate version maintenance.
+
 Common commands:
 
 ### Seal

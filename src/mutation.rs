@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use filetime::{FileTime, set_file_times};
 use tempfile::{Builder, TempDir};
 
 use crate::archiveio::{
@@ -70,6 +69,7 @@ pub fn rewrite_archive_to_path(
     let source_base_path = canonical_archive_base_path(source_path.as_ref())?;
     let dest_base_path = destination_path.as_ref().to_path_buf();
     let archive_dir = parent_dir_or_dot(&dest_base_path).to_path_buf();
+    assert_directory_has_write_permission(&archive_dir)?;
     let temp_output_dir = tempdir_in(&archive_dir, "amber-rewrite-")?;
     let temp_archive_base = temp_output_dir.path().join(
         dest_base_path
@@ -90,7 +90,6 @@ pub fn rewrite_archive_to_path(
             .clone()
             .ok_or_else(|| AmberError::Rebuild("Missing superblock in source archive".into()))?;
         let is_encrypted = (sb.flags & FLAG_ENCRYPTED) != 0;
-        let mut staged_entries = materialize_archive(&mut reader, stage_root.path())?;
         let mut plan = RewritePlan {
             default_chunk_size: sb.default_chunk_size,
             default_codec: sb.default_codec as u16,
@@ -116,13 +115,15 @@ pub fn rewrite_archive_to_path(
         if let Some(plan_mutator) = plan_mutator {
             plan = plan_mutator(&reader, plan)?;
         }
-        drop(reader);
 
+        let source_snapshot = snapshot_entries(reader.list());
+        let mut staged_entries = Vec::new();
         if let Some(stage_mutator) = stage_mutator {
             stage_mutator(stage_root.path(), &mut staged_entries)?;
         }
 
-        let expected_snapshot = snapshot_staged_entries(&staged_entries);
+        validate_no_staged_path_conflicts(reader.list(), &staged_entries)?;
+        let expected_snapshot = combined_snapshot(&source_snapshot, &staged_entries);
         let mut writer = ArchiveWriter::new(
             &temp_archive_base,
             Some(plan.default_chunk_size),
@@ -136,9 +137,11 @@ pub fn rewrite_archive_to_path(
             None,
         )?;
         writer.open()?;
+        write_source_entries(&mut reader, &mut writer)?;
         write_staged_entries(&staged_entries, &mut writer)?;
         writer.finalize()?;
         writer.close();
+        drop(reader);
 
         let rebuilt_segment_paths = discover_archive_segment_paths(&temp_archive_base)?;
         let rebuilt_base = rebuilt_segment_paths
@@ -301,6 +304,39 @@ fn snapshot_staged_entries(entries: &[StagedEntry]) -> Vec<EntrySignature> {
     snap
 }
 
+fn combined_snapshot(
+    source_snapshot: &[EntrySignature],
+    staged_entries: &[StagedEntry],
+) -> Vec<EntrySignature> {
+    let mut snap = source_snapshot.to_vec();
+    snap.extend(snapshot_staged_entries(staged_entries));
+    snap.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    snap
+}
+
+fn validate_no_staged_path_conflicts(
+    source_entries: &[ReaderEntry],
+    staged_entries: &[StagedEntry],
+) -> AmberResult<()> {
+    let mut paths = source_entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for entry in staged_entries {
+        if !paths.insert(entry.path.clone()) {
+            return Err(AmberError::Invalid(format!(
+                "archive path already exists: {}",
+                entry.path
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn infer_amcf_epsilon(reader: &ArchiveReader) -> usize {
     let total_data = reader.symbols.iter().filter(|info| !info.is_parity).count();
     if total_data == 0 {
@@ -345,101 +381,48 @@ fn infer_global_parity_scheme(reader: &ArchiveReader) -> AmberResult<String> {
         .to_owned())
 }
 
-fn materialize_archive(
-    reader: &mut ArchiveReader,
-    stage_root: &Path,
-) -> AmberResult<Vec<StagedEntry>> {
+fn write_source_entries(reader: &mut ArchiveReader, writer: &mut ArchiveWriter) -> AmberResult<()> {
     let entries = reader.list().to_vec();
-    let mut staged = Vec::new();
     let mut dirs = entries
         .iter()
         .filter(|entry| entry.kind == 1)
         .cloned()
         .collect::<Vec<_>>();
     dirs.sort_by_key(|entry| (entry.path.matches('/').count(), entry.path.clone()));
+    for entry in dirs {
+        writer.add_dir(
+            &entry.path,
+            entry.mode,
+            entry.mtime_sec,
+            entry.mtime_nsec,
+            entry.atime_sec,
+            entry.atime_nsec,
+        )?;
+    }
+
     let mut symlinks = entries
         .iter()
         .filter(|entry| entry.kind == 2)
         .cloned()
         .collect::<Vec<_>>();
     symlinks.sort_by_key(|entry| entry.path.clone());
+    for entry in symlinks {
+        let target = entry.symlink_target.as_deref().ok_or_else(|| {
+            AmberError::Rebuild(format!("Source symlink is missing target: {}", entry.path))
+        })?;
+        writer.add_symlink(&entry.path, target)?;
+    }
+
     let mut files = entries
         .iter()
         .filter(|entry| entry.kind == 0)
         .cloned()
         .collect::<Vec<_>>();
     files.sort_by_key(|entry| entry.path.clone());
-
-    for dir_entry in dirs {
-        let target = stage_root.join(&dir_entry.path);
-        fs::create_dir_all(&target)?;
-        staged.push(StagedEntry {
-            path: dir_entry.path,
-            kind: 1,
-            fs_path: None,
-            mode: dir_entry.mode,
-            mtime_sec: dir_entry.mtime_sec,
-            mtime_nsec: dir_entry.mtime_nsec,
-            atime_sec: dir_entry.atime_sec,
-            atime_nsec: dir_entry.atime_nsec,
-            file_codec: None,
-            chunk_size: None,
-            symlink_target: None,
-            size: 0,
-        });
+    for entry in files {
+        writer.add_file_from_archive_entry(reader, &entry)?;
     }
-    for symlink_entry in symlinks {
-        let target = stage_root.join(&symlink_entry.path);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        symlink(
-            symlink_entry.symlink_target.as_deref().unwrap_or(""),
-            &target,
-        )?;
-        staged.push(StagedEntry {
-            path: symlink_entry.path,
-            kind: 2,
-            fs_path: None,
-            mode: None,
-            mtime_sec: None,
-            mtime_nsec: None,
-            atime_sec: None,
-            atime_nsec: None,
-            file_codec: None,
-            chunk_size: None,
-            symlink_target: symlink_entry.symlink_target,
-            size: 0,
-        });
-    }
-    for file_entry in files {
-        let target = stage_root.join(&file_entry.path);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        reader.extract(&file_entry, &target)?;
-        apply_regular_metadata(
-            &target,
-            file_entry.mode,
-            file_entry.mtime_sec,
-            file_entry.atime_sec,
-        )?;
-        staged.push(StagedEntry {
-            path: file_entry.path,
-            kind: 0,
-            fs_path: Some(target),
-            mode: file_entry.mode,
-            mtime_sec: file_entry.mtime_sec,
-            mtime_nsec: file_entry.mtime_nsec,
-            atime_sec: file_entry.atime_sec,
-            atime_nsec: file_entry.atime_nsec,
-            file_codec: file_entry.file_codec,
-            chunk_size: file_entry.chunk_size,
-            symlink_target: None,
-            size: file_entry.size,
-        });
-    }
-    Ok(staged)
+    Ok(())
 }
 
 fn write_staged_entries(entries: &[StagedEntry], writer: &mut ArchiveWriter) -> AmberResult<()> {
@@ -616,32 +599,27 @@ fn final_archive_paths(base_path: &Path, segment_count: usize) -> AmberResult<Ve
         .collect()
 }
 
-fn apply_regular_metadata(
-    path: &Path,
-    mode: Option<u64>,
-    mtime_sec: Option<u64>,
-    atime_sec: Option<u64>,
-) -> AmberResult<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Some(mode) = mode {
-            fs::set_permissions(path, fs::Permissions::from_mode(mode as u32))?;
-        }
-    }
-    if let Some(mtime_sec) = mtime_sec {
-        let atime_sec = atime_sec.unwrap_or(mtime_sec);
-        set_file_times(
-            path,
-            FileTime::from_unix_time(atime_sec as i64, 0),
-            FileTime::from_unix_time(mtime_sec as i64, 0),
-        )?;
+fn tempdir(prefix: &str) -> AmberResult<TempDir> {
+    tempdir_in(Path::new(&std::env::temp_dir()), prefix)
+}
+
+#[cfg(unix)]
+fn assert_directory_has_write_permission(path: &Path) -> AmberResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = fs::metadata(path)?.permissions().mode();
+    if mode & 0o222 == 0 {
+        return Err(AmberError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("Permission denied: {}", path.display()),
+        )));
     }
     Ok(())
 }
 
-fn tempdir(prefix: &str) -> AmberResult<TempDir> {
-    tempdir_in(Path::new(&std::env::temp_dir()), prefix)
+#[cfg(not(unix))]
+fn assert_directory_has_write_permission(_path: &Path) -> AmberResult<()> {
+    Ok(())
 }
 
 fn tempdir_in(base: &Path, prefix: &str) -> AmberResult<TempDir> {
@@ -682,19 +660,6 @@ fn replace_path(source: &Path, target: &Path) -> AmberResult<()> {
 fn replace_path(source: &Path, target: &Path) -> AmberResult<()> {
     fs::rename(source, target)?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn symlink(target: &str, path: &Path) -> AmberResult<()> {
-    std::os::unix::fs::symlink(target, path)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn symlink(_target: &str, _path: &Path) -> AmberResult<()> {
-    Err(AmberError::Invalid(
-        "symlink staging is unsupported on this platform".into(),
-    ))
 }
 
 #[cfg(test)]

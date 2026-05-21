@@ -94,18 +94,20 @@ pub fn read_exact_or_invalid<R: Read>(reader: &mut R, n: usize) -> AmberResult<V
     }
 }
 
-pub fn read_record_at<R: Read + Seek>(
+pub fn read_record_at_bounded<R: Read + Seek>(
     reader: &mut R,
     offset: u64,
     decryptor: Option<&EncryptionContext>,
+    max_payload_len: u64,
 ) -> AmberResult<Record> {
     reader.seek(SeekFrom::Start(offset))?;
-    read_record(reader, decryptor)
+    read_record_bounded(reader, decryptor, max_payload_len)
 }
 
-pub fn read_record<R: Read + Seek>(
+pub fn read_record_bounded<R: Read + Seek>(
     reader: &mut R,
     decryptor: Option<&EncryptionContext>,
+    max_payload_len: u64,
 ) -> AmberResult<Record> {
     let rec_off = reader.stream_position()?;
     let fixed = read_exact_or_invalid(reader, RECORD_HEADER_SIZE)?;
@@ -116,6 +118,11 @@ pub fn read_record<R: Read + Seek>(
     let rflags = fixed[5];
     let header_len = u16::from_le_bytes([fixed[6], fixed[7]]) as usize;
     let payload_len = u64::from_le_bytes(fixed[8..16].try_into().unwrap());
+    if payload_len > max_payload_len {
+        return Err(AmberError::Invalid(format!(
+            "record payload length {payload_len} exceeds expected bound {max_payload_len}"
+        )));
+    }
     let hdr_crc = u32::from_le_bytes(fixed[16..20].try_into().unwrap());
     let header_ext = if header_len == 0 {
         Vec::new()
@@ -207,3 +214,7 @@ pub fn parse_chunk_header_ext(
         aux16,
     ))
 }
+
+#[cfg(test)]
+#[path = "tests/records.rs"]
+mod tests;

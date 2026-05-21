@@ -1,7 +1,7 @@
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crate::records::{read_record_at, write_record};
+    use crate::records::{read_record_at_bounded, write_record};
     use crate::superblock::pack_superblock;
 
     use super::*;
@@ -64,6 +64,48 @@
 
         assert!(assert_archive_output_path_clear(&base, true).is_err());
         assert!(assert_archive_output_path_clear(&base, false).is_err());
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn logical_writer_rejects_part_size_that_cannot_hold_repeated_superblock() {
+        let tmp = tempdir();
+        let base = tmp.join("tiny.amber");
+
+        let err = LogicalArchiveWriter::new(&base, Some(SUPERBLOCK_SIZE as u64)).unwrap_err();
+
+        assert!(err.to_string().contains("multipart part_size must be at least"));
+        assert!(!base.with_extension("amber.001").exists());
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn logical_reader_and_appender_reject_invalid_multipart_part_size_policy() {
+        let tmp = tempdir();
+        let archive_uuid = [0x55; 16];
+        let seg1 = tmp.join("archive.amber.001");
+        let seg2 = tmp.join("archive.amber.002");
+        let superblock = pack_superblock(
+            0,
+            archive_uuid,
+            0,
+            0,
+            262_144,
+            0,
+            Some(SUPERBLOCK_SIZE as u64),
+            None,
+        );
+        fs::write(&seg1, [superblock.as_slice(), b"A"].concat()).unwrap();
+        fs::write(&seg2, [superblock.as_slice(), b"B"].concat()).unwrap();
+
+        let read_err = LogicalArchiveReader::open_path(&seg1).unwrap_err();
+        assert!(read_err.to_string().contains("multipart part_size must be at least"));
+        let append_err = LogicalArchiveAppender::open_path(&seg1).unwrap_err();
+        assert!(
+            append_err
+                .to_string()
+                .contains("multipart part_size must be at least")
+        );
         let _ = fs::remove_dir_all(tmp);
     }
 
@@ -157,11 +199,13 @@
         }
 
         let mut reader = LogicalArchiveReader::open_path(&seg1).unwrap();
-        let r1 = read_record_at(&mut reader, superblock.len() as u64 + off1, None).unwrap();
-        let r2 = read_record_at(
+        let r1 =
+            read_record_at_bounded(&mut reader, superblock.len() as u64 + off1, None, 20).unwrap();
+        let r2 = read_record_at_bounded(
             &mut reader,
             superblock.len() as u64 + raw1.len() as u64 + off2,
             None,
+            20,
         )
         .unwrap();
         assert_eq!(r1.rtype, 1);

@@ -7,7 +7,7 @@
     use super::{ArchiveWriter, CANONICAL_WRITER_INFO};
     use crate::archiveio::LogicalArchiveReader;
     use crate::constants::{CODEC_ZSTD, RTYPE_ENTRY_BEGIN};
-    use crate::records::read_record_at;
+    use crate::records::read_record_at_bounded;
     use crate::reader::ArchiveReader;
     use crate::superblock::SUPERBLOCK_SIZE;
     use crate::tlv::{get_list, get_map, get_u64, iter_tlvs};
@@ -202,7 +202,8 @@
 
         let mut raw = LogicalArchiveReader::open_path(&archive).unwrap();
         raw.seek(SeekFrom::Start(SUPERBLOCK_SIZE as u64)).unwrap();
-        let record = read_record_at(&mut raw, SUPERBLOCK_SIZE as u64, None).unwrap();
+        let record =
+            read_record_at_bounded(&mut raw, SUPERBLOCK_SIZE as u64, None, 1024).unwrap();
         assert_eq!(record.rtype, RTYPE_ENTRY_BEGIN);
         let tags = iter_tlvs(&record.payload)
             .unwrap()
@@ -301,7 +302,8 @@
 
         let mut raw = LogicalArchiveReader::open_path(&archive).unwrap();
         raw.seek(SeekFrom::Start(SUPERBLOCK_SIZE as u64)).unwrap();
-        let record = read_record_at(&mut raw, SUPERBLOCK_SIZE as u64, None).unwrap();
+        let record =
+            read_record_at_bounded(&mut raw, SUPERBLOCK_SIZE as u64, None, 1024).unwrap();
         assert_eq!(record.rtype, RTYPE_ENTRY_BEGIN);
         let tags = iter_tlvs(&record.payload)
             .unwrap()

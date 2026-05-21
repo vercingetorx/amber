@@ -12,7 +12,7 @@ use crate::encryption::{EncryptionContext, EncryptionParams, derive_user_secret}
 use crate::error::{AmberError, AmberResult};
 use crate::hashutil::{blake3_32, merkle_leaf_from_chunk_tag, merkle_parent};
 use crate::pathutil::{validate_archive_path, validate_symlink_target};
-use crate::records::{parse_chunk_header_ext, read_record_at};
+use crate::records::{parse_chunk_header_ext, read_record_at_bounded};
 use crate::superblock::{Superblock, read_superblock};
 use crate::tlv::{
     IndexLimits, TlvMap, get_bool, get_bytes, get_list, get_map, get_string, get_u64, loads_anchor,
@@ -21,6 +21,7 @@ use crate::tlv::{
 use crate::trailer::{INDEX_FRAME_HEADER_SIZE, INDEX_LOCATOR_SIZE};
 
 const MAX_INDEX_UNCOMPRESSED: u64 = 128 * 1024 * 1024;
+const MAX_ANCHOR_RECORD_PAYLOAD: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChunkDesc {
@@ -358,7 +359,12 @@ impl ArchiveReader {
         }
         let mut out = std::fs::File::create(out_path)?;
         for chunk in &entry.chunks {
-            let record = read_record_at(file, chunk.offset, self.decryptor.as_ref())?;
+            let record = read_record_at_bounded(
+                file,
+                chunk.offset,
+                self.decryptor.as_ref(),
+                chunk.payload_len,
+            )?;
             if record.rtype != RTYPE_CHUNK {
                 return Err(AmberError::Invalid("Expected chunk record".into()));
             }
@@ -388,6 +394,51 @@ impl ArchiveReader {
         Ok(())
     }
 
+    pub fn read_chunk_plaintext(&mut self, chunk: &ChunkDesc) -> AmberResult<(u16, Vec<u8>)> {
+        let Some(file) = self.file.as_mut() else {
+            return Err(AmberError::Invalid("Archive not open".into()));
+        };
+        let record = read_record_at_bounded(
+            file,
+            chunk.offset,
+            self.decryptor.as_ref(),
+            chunk.payload_len,
+        )?;
+        if record.rtype != RTYPE_CHUNK {
+            return Err(AmberError::Invalid("Expected chunk record".into()));
+        }
+        let (_eid, idx, ulen, codec_id, _flags, tag32, _aux16) =
+            parse_chunk_header_ext(&record.header_ext)?;
+        if idx as u64 != chunk.chunk_index {
+            return Err(AmberError::Invalid(
+                "Chunk index mismatch between record and index".into(),
+            ));
+        }
+        if ulen as u64 != chunk.uncompressed_len {
+            return Err(AmberError::Invalid(
+                "Chunk length mismatch between record and index".into(),
+            ));
+        }
+        let raw = Codec::new(codec_id).decompress(
+            &record.payload,
+            Some(
+                usize::try_from(chunk.uncompressed_len)
+                    .map_err(|_| AmberError::Invalid("chunk length too large".into()))?,
+            ),
+        )?;
+        if raw.len() as u64 != chunk.uncompressed_len {
+            return Err(AmberError::Invalid(
+                "Chunk length mismatch after decompress".into(),
+            ));
+        }
+        if blake3_32(&raw) != tag32 || tag32 != chunk.tag32 {
+            return Err(AmberError::Invalid(
+                "Chunk tag mismatch; data corrupted".into(),
+            ));
+        }
+        Ok((codec_id, raw))
+    }
+
     pub fn verify(&mut self) -> AmberResult<bool> {
         let Some(file) = self.file.as_mut() else {
             return Err(AmberError::Invalid("Archive not open".into()));
@@ -399,7 +450,12 @@ impl ArchiveReader {
             }
             let mut file_bytes = Vec::new();
             for chunk in &entry.chunks {
-                let record = match read_record_at(file, chunk.offset, self.decryptor.as_ref()) {
+                let record = match read_record_at_bounded(
+                    file,
+                    chunk.offset,
+                    self.decryptor.as_ref(),
+                    chunk.payload_len,
+                ) {
                     Ok(record) => record,
                     Err(_) => {
                         ok = false;
@@ -462,6 +518,56 @@ fn rfind_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .find(|&idx| &haystack[idx..idx + needle.len()] == needle)
 }
 
+fn required_u64(map: &TlvMap, key: &str) -> AmberResult<u64> {
+    get_u64(map, key).ok_or_else(|| AmberError::Invalid(format!("index is missing {key}")))
+}
+
+fn required_bool(map: &TlvMap, key: &str) -> AmberResult<bool> {
+    get_bool(map, key).ok_or_else(|| AmberError::Invalid(format!("index is missing {key}")))
+}
+
+fn required_list<'a>(map: &'a TlvMap, key: &str) -> AmberResult<&'a Vec<TlvMap>> {
+    get_list(map, key).ok_or_else(|| AmberError::Invalid(format!("index is missing {key}")))
+}
+
+fn required_32(map: &TlvMap, key: &str) -> AmberResult<[u8; 32]> {
+    let bytes =
+        get_bytes(map, key).ok_or_else(|| AmberError::Invalid(format!("index is missing {key}")))?;
+    if bytes.len() != 32 {
+        return Err(AmberError::Invalid(format!("{key} must be 32 bytes")));
+    }
+    Ok(copy_32(bytes))
+}
+
+fn required_16(map: &TlvMap, key: &str) -> AmberResult<[u8; 16]> {
+    let bytes =
+        get_bytes(map, key).ok_or_else(|| AmberError::Invalid(format!("index is missing {key}")))?;
+    if bytes.len() != 16 {
+        return Err(AmberError::Invalid(format!("{key} must be 16 bytes")));
+    }
+    Ok(copy_16(bytes))
+}
+
+fn optional_32(map: &TlvMap, key: &str) -> AmberResult<Option<[u8; 32]>> {
+    let Some(bytes) = get_bytes(map, key) else {
+        return Ok(None);
+    };
+    if bytes.len() != 32 {
+        return Err(AmberError::Invalid(format!("{key} must be 32 bytes")));
+    }
+    Ok(Some(copy_32(bytes)))
+}
+
+fn optional_16(map: &TlvMap, key: &str) -> AmberResult<Option<[u8; 16]>> {
+    let Some(bytes) = get_bytes(map, key) else {
+        return Ok(None);
+    };
+    if bytes.len() != 16 {
+        return Err(AmberError::Invalid(format!("{key} must be 16 bytes")));
+    }
+    Ok(Some(copy_16(bytes)))
+}
+
 impl ArchiveReader {
     fn validate_segments_metadata(&self, file: &LogicalArchiveReader) -> AmberResult<()> {
         if self.segments_meta.is_empty() {
@@ -477,9 +583,8 @@ impl ArchiveReader {
         }
         let mut expected_index = 1u64;
         for (meta, actual) in self.segments_meta.iter().zip(actual_segments.iter()) {
-            let segment_index = get_u64(meta, "segment_index").unwrap_or(0);
-            let physical_header_length =
-                get_u64(meta, "physical_header_length").unwrap_or(u64::MAX);
+            let segment_index = required_u64(meta, "segment_index")?;
+            let physical_header_length = required_u64(meta, "physical_header_length")?;
             if segment_index != expected_index {
                 return Err(AmberError::ChunkBounds(
                     "Index segment numbering is not contiguous".into(),
@@ -505,12 +610,21 @@ impl ArchiveReader {
             if path.len() > 1024 {
                 return Err(AmberError::Invalid("Path length exceeds 1024 bytes".into()));
             }
-            let kind = get_u64(&ent, "kind").unwrap_or(0);
+            let kind = required_u64(&ent, "kind")?;
+            if !matches!(kind, 0 | 1 | 2) {
+                return Err(AmberError::Invalid(format!(
+                    "unsupported entry kind: {kind}"
+                )));
+            }
             let mut entry = Entry {
-                entry_id: get_u64(&ent, "entry_id").unwrap_or(0),
+                entry_id: required_u64(&ent, "entry_id")?,
                 kind,
                 path,
-                size: get_u64(&ent, "size").unwrap_or(0),
+                size: if kind == 0 {
+                    required_u64(&ent, "size")?
+                } else {
+                    0
+                },
                 mode: get_u64(&ent, "mode"),
                 mtime_sec: get_map(&ent, "mtime").and_then(|m| get_u64(m, "sec")),
                 mtime_nsec: get_map(&ent, "mtime").and_then(|m| get_u64(m, "nsec")),
@@ -519,12 +633,12 @@ impl ArchiveReader {
                 file_codec: get_u64(&ent, "file_codec"),
                 chunk_size: get_u64(&ent, "chunk_size"),
                 chunks: Vec::new(),
-                file_hash32: get_bytes(&ent, "file_blake3_32").map(copy_32),
+                file_hash32: optional_32(&ent, "file_blake3_32")?,
                 symlink_target: None,
             };
             if kind == 0 {
-                for ch in get_list(&ent, "chunks").cloned().unwrap_or_default() {
-                    let uncompressed_len = get_u64(&ch, "uncompressed_len").unwrap_or(0);
+                for ch in required_list(&ent, "chunks")?.clone() {
+                    let uncompressed_len = required_u64(&ch, "uncompressed_len")?;
                     if let Some(chunk_size) = entry.chunk_size
                         && uncompressed_len > chunk_size
                     {
@@ -532,9 +646,9 @@ impl ArchiveReader {
                             "Chunk uncompressed_len exceeds declared chunk_size".into(),
                         ));
                     }
-                    let offset = get_u64(&ch, "offset").unwrap_or(0);
-                    let payload_offset = get_u64(&ch, "payload_offset").unwrap_or(0);
-                    let payload_len = get_u64(&ch, "payload_len").unwrap_or(0);
+                    let offset = required_u64(&ch, "offset")?;
+                    let payload_offset = required_u64(&ch, "payload_offset")?;
+                    let payload_len = required_u64(&ch, "payload_len")?;
                     if offset >= archive_size {
                         return Err(AmberError::ChunkBounds("Chunk offset out of range".into()));
                     }
@@ -556,16 +670,14 @@ impl ArchiveReader {
                         payload_offset,
                         payload_len,
                         uncompressed_len,
-                        chunk_index: get_u64(&ch, "chunk_index").unwrap_or(0),
-                        tag32: copy_32(get_bytes(&ch, "blake3_32").ok_or_else(|| {
-                            AmberError::Invalid("chunk is missing blake3_32".into())
-                        })?),
+                        chunk_index: required_u64(&ch, "chunk_index")?,
+                        tag32: required_32(&ch, "blake3_32")?,
                     });
                 }
             }
-            if kind == 2
-                && let Some(target) = get_string(&ent, "symlink_target")
-            {
+            if kind == 2 {
+                let target = get_string(&ent, "symlink_target")
+                    .ok_or_else(|| AmberError::Invalid("symlink entry is missing target".into()))?;
                 entry.symlink_target = Some(validate_symlink_target(target)?);
             }
             entries.push(entry);
@@ -614,32 +726,30 @@ impl ArchiveReader {
         }
 
         let mut symbol_map = std::collections::BTreeMap::new();
-        self.symbol_size = get_u64(&groups[0], "symbol_size").unwrap_or(65_536);
+        self.symbol_size = required_u64(&groups[0], "symbol_size")?;
 
         for group in groups {
-            if get_u64(&group, "symbol_size").unwrap_or(self.symbol_size) != self.symbol_size {
+            if required_u64(&group, "symbol_size")? != self.symbol_size {
                 return Err(AmberError::SymbolSizeMismatch(
                     "Mismatched symbol_size across ECC groups".into(),
                 ));
             }
 
-            for sym in get_list(&group, "symbols").cloned().unwrap_or_default() {
-                let record_offset = get_u64(&sym, "record_offset").ok_or_else(|| {
-                    AmberError::Invalid("ECC symbol missing record_offset in index".into())
-                })?;
-                let length = get_u64(&sym, "length").unwrap_or(0);
-                let offset = get_u64(&sym, "offset").unwrap_or(0);
+            for sym in required_list(&group, "symbols")?.clone() {
+                let record_offset = required_u64(&sym, "record_offset")?;
+                let length = required_u64(&sym, "length")?;
+                let offset = required_u64(&sym, "offset")?;
                 let info = SymbolInfo {
-                    symbol_index: get_u64(&sym, "symbol_index").unwrap_or(0),
+                    symbol_index: required_u64(&sym, "symbol_index")?,
                     offset,
                     record_offset,
                     length,
-                    tag32: get_bytes(&sym, "tag32").map(copy_32).unwrap_or([0u8; 32]),
+                    tag32: required_32(&sym, "tag32")?,
                     stripe_index: get_u64(&sym, "stripe_index")
                         .map(|v| v as i64)
                         .unwrap_or(-1),
-                    is_parity: get_bool(&sym, "is_parity").unwrap_or(false),
-                    seed_base: get_bytes(&sym, "seed_base").map(copy_16),
+                    is_parity: required_bool(&sym, "is_parity")?,
+                    seed_base: optional_16(&sym, "seed_base")?,
                 };
                 let mut max_len = self.symbol_size;
                 if info.is_parity && self.decryptor.is_some() {
@@ -670,22 +780,17 @@ impl ArchiveReader {
             }
 
             if let Some(amcf) = get_map(&group, "amcf") {
-                let group_seed_base = get_bytes(amcf, "seed_base")
-                    .map(copy_16)
-                    .unwrap_or([0u8; 16]);
-                let group_parity = get_list(amcf, "parity").cloned().unwrap_or_default();
-                let group_row_count = group_parity.len() as u64;
+                let group_seed_base = required_16(amcf, "seed_base")?;
+                let group_parity = required_list(amcf, "parity")?.clone();
                 for item in group_parity {
                     self.amcf_parities.push(AmcfParityInfo {
-                        symbol_index: get_u64(&item, "symbol_index").unwrap_or(0),
-                        seed_id: get_u64(&item, "seed_id").unwrap_or(0),
-                        offset: get_u64(&item, "offset").unwrap_or(0),
-                        length: get_u64(&item, "length").unwrap_or(self.symbol_size),
-                        tag32: get_bytes(&item, "tag32").map(copy_32).unwrap_or([0u8; 32]),
-                        seed_base: get_bytes(&item, "seed_base")
-                            .map(copy_16)
-                            .unwrap_or(group_seed_base),
-                        row_count: get_u64(&item, "row_count").unwrap_or(group_row_count),
+                        symbol_index: required_u64(&item, "symbol_index")?,
+                        seed_id: required_u64(&item, "seed_id")?,
+                        offset: required_u64(&item, "offset")?,
+                        length: required_u64(&item, "length")?,
+                        tag32: required_32(&item, "tag32")?,
+                        seed_base: optional_16(&item, "seed_base")?.unwrap_or(group_seed_base),
+                        row_count: required_u64(&item, "row_count")?,
                     });
                 }
             }
@@ -715,7 +820,12 @@ impl ArchiveReader {
                 continue;
             };
             self.anchor_total_count += 1;
-            let record = match read_record_at(file, offset, self.decryptor.as_ref()) {
+            let record = match read_record_at_bounded(
+                file,
+                offset,
+                self.decryptor.as_ref(),
+                MAX_ANCHOR_RECORD_PAYLOAD,
+            ) {
                 Ok(record) => record,
                 Err(_) => {
                     self.anchor_fail_count += 1;

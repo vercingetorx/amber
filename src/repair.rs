@@ -11,7 +11,7 @@ use crate::gf256::{gf_add_bytes, gf_inv, gf_mul, gf_mul_bytes};
 use crate::hashutil::blake3_32;
 use crate::mutation::mutate_archive_via_work_copy;
 use crate::reader::{ArchiveReader, SymbolInfo};
-use crate::records::{parse_chunk_header_ext, read_record_at};
+use crate::records::{parse_chunk_header_ext, read_record_at_bounded};
 use crate::recover::rebuild_index;
 use crate::tlv::{get_list, get_map, get_string, get_u64};
 
@@ -264,7 +264,15 @@ fn verify_chunk_integrity(
     fh: &mut LogicalArchiveReader,
     record_offset: u64,
 ) -> bool {
-    let record = match read_record_at(fh, record_offset, reader.decryptor.as_ref()) {
+    let Some(max_payload_len) = expected_record_payload_len(reader, record_offset) else {
+        return false;
+    };
+    let record = match read_record_at_bounded(
+        fh,
+        record_offset,
+        reader.decryptor.as_ref(),
+        max_payload_len,
+    ) {
         Ok(record) => record,
         Err(_) => return false,
     };
@@ -281,6 +289,16 @@ fn verify_chunk_integrity(
         Err(_) => return false,
     };
     blake3_32(&raw) == tag32
+}
+
+fn expected_record_payload_len(reader: &ArchiveReader, record_offset: u64) -> Option<u64> {
+    reader
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == 0)
+        .flat_map(|entry| entry.chunks.iter())
+        .find(|chunk| chunk.offset == record_offset)
+        .map(|chunk| chunk.payload_len)
 }
 
 fn repair_amcf(
@@ -715,7 +733,12 @@ fn load_symbol_data(
     symbol: &SymbolInfo,
 ) -> AmberResult<(Option<Vec<u8>>, usize)> {
     if reader.decryptor.is_some() && symbol.is_parity {
-        let record = match read_record_at(fh, symbol.record_offset, reader.decryptor.as_ref()) {
+        let record = match read_record_at_bounded(
+            fh,
+            symbol.record_offset,
+            reader.decryptor.as_ref(),
+            symbol.length,
+        ) {
             Ok(record) => record,
             Err(_) => return Ok((None, 0)),
         };

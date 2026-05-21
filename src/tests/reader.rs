@@ -209,6 +209,97 @@
     }
 
     #[test]
+    fn reader_rejects_entry_missing_required_kind() {
+        let mut idx = TlvMap::new();
+        idx.insert(
+            "entries".into(),
+            TlvValue::List(vec![{
+                let mut ent = TlvMap::new();
+                ent.insert("entry_id".into(), TlvValue::U64(1));
+                ent.insert("path".into(), TlvValue::String("f.txt".into()));
+                ent
+            }]),
+        );
+
+        let reader = ArchiveReader::new("unused.amber");
+        let err = reader.build_entries(&idx, 1024).unwrap_err();
+        assert!(err.to_string().contains("index is missing kind"));
+    }
+
+    #[test]
+    fn reader_rejects_file_chunk_missing_required_offset() {
+        let tag = [0x22; 32];
+        let mut idx = TlvMap::new();
+        idx.insert(
+            "entries".into(),
+            TlvValue::List(vec![{
+                let mut ent = TlvMap::new();
+                ent.insert("entry_id".into(), TlvValue::U64(1));
+                ent.insert("kind".into(), TlvValue::U64(0));
+                ent.insert("path".into(), TlvValue::String("f.txt".into()));
+                ent.insert("size".into(), TlvValue::U64(1));
+                ent.insert(
+                    "chunks".into(),
+                    TlvValue::List(vec![{
+                        let mut ch = TlvMap::new();
+                        ch.insert("payload_offset".into(), TlvValue::U64(128));
+                        ch.insert("payload_len".into(), TlvValue::U64(1));
+                        ch.insert("uncompressed_len".into(), TlvValue::U64(1));
+                        ch.insert("chunk_index".into(), TlvValue::U64(0));
+                        ch.insert("blake3_32".into(), TlvValue::Bytes(tag.to_vec()));
+                        ch
+                    }]),
+                );
+                ent
+            }]),
+        );
+
+        let reader = ArchiveReader::new("unused.amber");
+        let err = reader.build_entries(&idx, 1024).unwrap_err();
+        assert!(err.to_string().contains("index is missing offset"));
+    }
+
+    #[test]
+    fn reader_rejects_ecc_symbol_missing_required_length() {
+        let mut idx = TlvMap::new();
+        idx.insert(
+            "ecc_groups".into(),
+            TlvValue::List(vec![{
+                let mut group = TlvMap::new();
+                group.insert("group_id".into(), TlvValue::U64(0));
+                group.insert("symbol_size".into(), TlvValue::U64(65_536));
+                group.insert(
+                    "symbols".into(),
+                    TlvValue::List(vec![{
+                        let mut sym = TlvMap::new();
+                        sym.insert("symbol_index".into(), TlvValue::U64(0));
+                        sym.insert("offset".into(), TlvValue::U64(0));
+                        sym.insert("tag32".into(), TlvValue::Bytes(vec![0; 32]));
+                        sym.insert("record_offset".into(), TlvValue::U64(0));
+                        sym.insert("is_parity".into(), TlvValue::Bool(false));
+                        sym
+                    }]),
+                );
+                group.insert(
+                    "amcf".into(),
+                    TlvValue::Map({
+                        let mut amcf = TlvMap::new();
+                        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        amcf.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        amcf.insert("parity".into(), TlvValue::List(vec![]));
+                        amcf
+                    }),
+                );
+                group
+            }]),
+        );
+
+        let mut reader = ArchiveReader::new("unused.amber");
+        let err = reader.load_ecc_groups(&idx, 1024).unwrap_err();
+        assert!(err.to_string().contains("index is missing length"));
+    }
+
+    #[test]
     fn reader_loads_ecc_groups_and_anchor_records() {
         let tmp = tempdir();
         let archive_uuid = [0x7A; 16];
@@ -317,6 +408,7 @@
                     "amcf".into(),
                     TlvValue::Map({
                         let mut amcf = TlvMap::new();
+                        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
                         amcf.insert("epsilon_ppm".into(), TlvValue::U64(0));
                         amcf.insert("parity".into(), TlvValue::List(vec![]));
                         amcf
@@ -399,6 +491,7 @@
                     "amcf".into(),
                     TlvValue::Map({
                         let mut amcf = TlvMap::new();
+                        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
                         amcf.insert("epsilon_ppm".into(), TlvValue::U64(0));
                         amcf.insert("parity".into(), TlvValue::List(vec![]));
                         amcf

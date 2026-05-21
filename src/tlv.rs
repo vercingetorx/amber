@@ -107,8 +107,8 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                 if let Some(chunk_size) = get_u64(ent, "chunk_size") {
                     e_payload.extend(tlv(9, &varint_encode(chunk_size))?);
                 }
-                let mut chunks_payload = Vec::new();
                 if let Some(chunks) = get_list(ent, "chunks") {
+                    let mut chunks_payload = Vec::new();
                     for ch in chunks {
                         let mut ch_payload = Vec::new();
                         ch_payload
@@ -134,8 +134,6 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                         }
                         chunks_payload.extend(tlv(1, &ch_payload)?);
                     }
-                }
-                if !chunks_payload.is_empty() {
                     e_payload.extend(tlv(11, &chunks_payload)?);
                 }
                 if let Some(tag) = get_bytes(ent, "file_blake3_32") {

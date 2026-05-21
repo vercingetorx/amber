@@ -13,7 +13,7 @@ use crate::encryption::{EncryptionContext, EncryptionParams, derive_user_secret}
 use crate::error::{AmberError, AmberResult};
 use crate::globalparity::validate_global_parity_scheme;
 use crate::hashutil::{blake3_32, merkle_leaf_from_chunk_tag, merkle_parent};
-use crate::records::{RECORD_HEADER_SIZE, parse_chunk_header_ext, read_record_at};
+use crate::records::{RECORD_HEADER_SIZE, parse_chunk_header_ext, read_record_at_bounded};
 use crate::superblock::{SUPERBLOCK_SIZE, read_superblock};
 use crate::tlv::{
     TlvMap, TlvValue, dumps_index, get_bool, get_bytes, get_u64, iter_tlvs, loads_anchor,
@@ -351,7 +351,10 @@ pub fn rebuild_index(
             let Some(offset) = get_u64(&ch, "offset") else {
                 continue;
             };
-            let Ok(record) = read_record_at(&mut vf, offset, None) else {
+            let Some(payload_len) = get_u64(&ch, "payload_len") else {
+                continue;
+            };
+            let Ok(record) = read_record_at_bounded(&mut vf, offset, None, payload_len) else {
                 continue;
             };
             if record.rtype != RTYPE_CHUNK {

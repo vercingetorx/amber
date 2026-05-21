@@ -69,6 +69,20 @@ pub fn emit_file_chunks<W: RecordWriteTarget>(
     Ok((chunks, file_hash32))
 }
 
+pub fn emit_plain_chunk<W: RecordWriteTarget>(
+    ctx: &mut ChunkEmitContext<'_, W>,
+    entry_id: u64,
+    idx: u32,
+    codec_id: u16,
+    raw: &[u8],
+    chunks: &mut Vec<ChunkMeta>,
+) -> AmberResult<()> {
+    let codec = Codec::new(codec_id);
+    let enc = codec.compress(raw)?;
+    let tag32 = blake3_32(raw);
+    write_chunk_payload(ctx, entry_id, idx, raw.len(), codec_id, &enc, &tag32, chunks)
+}
+
 fn write_chunk_payload<W: RecordWriteTarget>(
     ctx: &mut ChunkEmitContext<'_, W>,
     entry_id: u64,
