@@ -88,7 +88,7 @@ Index/trailer:
 - contains manifest, chunk map, symbol map, ECC metadata, anchors, and top-level commitments
 - stored as redundant trailer frames plus locator records
 
-ECC metadata records the global parity scheme as `amcf`. The scheme identifies Amber's canonical AMCF-ECC construction for the archive; it is not an operator-selectable profile set.
+ECC metadata records the global parity scheme as `amcf`. The scheme identifies Amber's canonical AMCF-ECC construction for the archive; it is not an operator-selectable profile set. Archives with parity symbols must carry explicit AMCF metadata and an explicit scheme. Mutation code does not infer missing ECC metadata for parity-bearing archives.
 
 ## Canonical multipart form
 
@@ -127,7 +127,7 @@ Canonical mutations:
 
 - stage contents
 - write one new archive image
-- verify it
+- verify payload integrity and repair-redundancy health
 - atomically replace the committed archive set
 
 That rule applies to:
@@ -135,6 +135,6 @@ That rule applies to:
 - append
 - harden
 - rebuild
-- successful repair
+- successful repair with no remaining damaged data chunks or AMCF parity symbols
 
 Failed mutation must not leave a partially committed canonical archive image behind.

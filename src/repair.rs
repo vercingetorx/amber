@@ -98,52 +98,19 @@ pub fn detect_corrupted_symbols(
     reader: &ArchiveReader,
     file_handle: &mut LogicalArchiveReader,
 ) -> AmberResult<BTreeSet<u64>> {
-    let mut corrupted = BTreeSet::new();
-    let mut chunk_symbols: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    for sym in &reader.symbols {
-        if sym.is_parity {
-            continue;
-        }
-        chunk_symbols
-            .entry(sym.record_offset)
-            .or_default()
-            .push(sym.symbol_index);
-    }
-    let mut chunk_verification: BTreeMap<u64, bool> = BTreeMap::new();
-    for sym in &reader.symbols {
-        if sym.length == 0 {
-            continue;
-        }
-        let (payload, plain_len) = load_symbol_data(reader, file_handle, sym)?;
-        let Some(payload) = payload else {
-            corrupted.insert(sym.symbol_index);
-            continue;
-        };
-        if plain_len == 0 {
-            corrupted.insert(sym.symbol_index);
-            continue;
-        }
-        if sym.tag32 != [0u8; 32] && blake3_32(&payload[..plain_len]) != sym.tag32 {
-            corrupted.insert(sym.symbol_index);
-            continue;
-        }
-        if !sym.is_parity {
-            let status = if let Some(status) = chunk_verification.get(&sym.record_offset) {
-                *status
-            } else {
-                let status = verify_chunk_integrity(reader, file_handle, sym.record_offset);
-                chunk_verification.insert(sym.record_offset, status);
-                status
-            };
-            if !status && let Some(impacted) = chunk_symbols.get(&sym.record_offset) {
-                corrupted.extend(impacted.iter().copied());
-            }
-        }
-    }
-    Ok(corrupted)
+    let mut progress = None;
+    detect_corrupted_symbols_inner(reader, file_handle, &mut progress)
 }
 
 fn detect_corrupted_symbols_with_progress(
+    reader: &ArchiveReader,
+    file_handle: &mut LogicalArchiveReader,
+    progress: &mut Option<&mut dyn FnMut(String)>,
+) -> AmberResult<BTreeSet<u64>> {
+    detect_corrupted_symbols_inner(reader, file_handle, progress)
+}
+
+fn detect_corrupted_symbols_inner(
     reader: &ArchiveReader,
     file_handle: &mut LogicalArchiveReader,
     progress: &mut Option<&mut dyn FnMut(String)>,

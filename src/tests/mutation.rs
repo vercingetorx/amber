@@ -1,13 +1,16 @@
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{StagedEntry, rebuild_archive, rewrite_archive_in_place, rewrite_archive_to_path};
+    use super::{
+        StagedEntry, infer_global_parity_scheme, rebuild_archive, rewrite_archive_in_place,
+        rewrite_archive_to_path,
+    };
     use crate::AmberError;
     use crate::append::append_to_archive;
     use crate::constants::CODEC_NONE;
     use crate::globalparity::MIN_TOTAL_PARITY_ROWS_FLOOR;
-    use crate::reader::ArchiveReader;
-    use crate::tlv::{get_list, get_map, get_u64};
+    use crate::reader::{ArchiveReader, SymbolInfo};
+    use crate::tlv::{TlvMap, TlvValue, get_list, get_map, get_u64};
     use crate::writer::ArchiveWriter;
 
     fn tempdir() -> std::path::PathBuf {
@@ -286,6 +289,38 @@
         assert_eq!(after_rows, MIN_TOTAL_PARITY_ROWS_FLOOR);
 
         let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn parity_archive_requires_explicit_amcf_scheme_for_rewrite() {
+        let mut reader = ArchiveReader::new("missing-scheme.amber");
+        reader.symbols.push(SymbolInfo {
+            symbol_index: 0,
+            offset: 0,
+            record_offset: 0,
+            length: 16,
+            tag32: [0u8; 32],
+            stripe_index: -1,
+            is_parity: true,
+            seed_base: Some([0u8; 16]),
+        });
+
+        let mut amcf = TlvMap::new();
+        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0u8; 16]));
+        amcf.insert("parity".into(), TlvValue::List(Vec::new()));
+
+        let mut group = TlvMap::new();
+        group.insert("group_id".into(), TlvValue::U64(0));
+        group.insert("symbol_size".into(), TlvValue::U64(65_536));
+        group.insert("symbols".into(), TlvValue::List(Vec::new()));
+        group.insert("amcf".into(), TlvValue::Map(amcf));
+
+        let mut index = TlvMap::new();
+        index.insert("ecc_groups".into(), TlvValue::List(vec![group]));
+        reader.index = Some(index);
+
+        let err = infer_global_parity_scheme(&reader).unwrap_err();
+        assert!(err.to_string().contains("AMCF metadata is missing its scheme"));
     }
 
     #[test]

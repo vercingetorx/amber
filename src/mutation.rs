@@ -358,23 +358,38 @@ fn infer_total_parity_rows(reader: &ArchiveReader) -> usize {
 }
 
 fn infer_global_parity_scheme(reader: &ArchiveReader) -> AmberResult<String> {
-    let Some(index) = reader.index.as_ref() else {
+    let has_ecc_symbols = reader.symbols.iter().any(|symbol| symbol.is_parity);
+    if !has_ecc_symbols && reader.amcf_parities.is_empty() {
         return Ok(GLOBAL_PARITY_SCHEME_AMCF.into());
+    }
+    let Some(index) = reader.index.as_ref() else {
+        return Err(AmberError::Invalid(
+            "archive with parity symbols is missing index metadata".into(),
+        ));
     };
     let Some(groups) = get_list(index, "ecc_groups") else {
-        return Ok(GLOBAL_PARITY_SCHEME_AMCF.into());
+        return Err(AmberError::Invalid(
+            "archive with parity symbols is missing ECC group metadata".into(),
+        ));
     };
     let Some(group) = groups
         .iter()
+        .filter(|group| get_map(group, "amcf").is_some())
         .max_by_key(|group| crate::tlv::get_u64(group, "group_id").unwrap_or(0))
     else {
-        return Ok(GLOBAL_PARITY_SCHEME_AMCF.into());
+        return Err(AmberError::Invalid(
+            "archive with parity symbols is missing AMCF metadata".into(),
+        ));
     };
     let Some(amcf) = get_map(group, "amcf") else {
-        return Ok(GLOBAL_PARITY_SCHEME_AMCF.into());
+        return Err(AmberError::Invalid(
+            "archive with parity symbols is missing AMCF metadata".into(),
+        ));
     };
     let Some(stored_scheme) = get_string(amcf, "scheme") else {
-        return Ok(GLOBAL_PARITY_SCHEME_AMCF.into());
+        return Err(AmberError::Invalid(
+            "AMCF metadata is missing its scheme".into(),
+        ));
     };
     Ok(require_canonical_global_parity_scheme(stored_scheme)
         .map_err(AmberError::Invalid)?

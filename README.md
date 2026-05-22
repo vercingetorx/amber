@@ -210,11 +210,13 @@ Amber mutations are canonical rewrite-on-commit operations.
 - `append` stages prior archive contents plus new inputs, writes one new canonical archive image, verifies it, then swaps it into place.
 - `harden` rewrites the archive with a larger canonical AMCF budget.
 - `rebuild` writes a fresh canonical archive image and keeps a backup.
-- `repair` repairs a work copy and only commits if no damaged data chunks remain.
+- `repair` repairs a work copy and only commits if no damaged data chunks or damaged AMCF parity symbols remain.
 
 Operational rules:
 
 - `harden` requires a clean archive.
+- `append` requires a clean archive.
+- `verify` checks payload readability and reports damaged repair redundancy as a warning.
 - If `verify` fails, run `repair` first.
 - Safe repair writes a repaired copy rather than mutating the original.
 
@@ -225,11 +227,11 @@ Operational rules:
 - Scrub regularly.
   - Cold data: quarterly.
   - Active archives: monthly.
-  - Use `amber verify` for quick checks.
-  - Use `amber scrub --repair` for fleet maintenance.
+  - Use `amber verify` for quick payload checks.
+  - Use `amber scrub --repair` for full archive-health maintenance, including AMCF parity.
 - Repair before hardening.
   - If `verify` fails, run `amber repair`, then verify again.
-  - Run `amber harden` only once `amber verify` passes.
+  - Run `amber harden` only once `amber verify` passes and `amber scrub` reports no damaged repair redundancy.
   - If you see repair events, adding `1-3%` more AMCF parity is a reasonable way to restore margin.
 - After moving archives to new media:
   - run `verify`

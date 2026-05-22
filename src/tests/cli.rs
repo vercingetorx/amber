@@ -4,7 +4,7 @@
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        ExistsMode, ScrubOptions, SealOptions, UnsealOptions, append_command, archive_info,
+        ExistsMode, ScrubOptions, ScrubStatus, SealOptions, UnsealOptions, append_command, archive_info,
         default_repaired_output_path, harden_command, list_archive, parse_part_size,
         rebuild_command, repair_command, scrub_archives, scrub_summary_json, seal_archive,
         unseal_archive, verify_archive,
@@ -221,7 +221,7 @@
         assert_eq!(info.entry_count, 1);
 
         let verify = verify_archive(&archive, None, None).unwrap();
-        assert!(verify.ok);
+        assert!(verify.payload_ok);
 
         append_command(&archive, &[&input_b], None, None).unwrap();
         let listed = list_archive(&archive, None, None).unwrap();
@@ -546,7 +546,7 @@
         .unwrap();
         assert_eq!(summary.ok, 0);
         assert_eq!(summary.failed, 1);
-        assert_eq!(summary.results[0].status, "fail");
+        assert_eq!(summary.results[0].status, ScrubStatus::Failed);
 
         let _ = fs::remove_dir_all(tmp);
     }
@@ -588,10 +588,17 @@
         drop(rw);
 
         let verify = verify_archive(&archive, None, None).unwrap();
-        assert!(verify.ok);
+        assert!(verify.payload_ok);
         assert!(!verify.parity_ok);
         assert_eq!(verify.damaged_data_symbols, 0);
         assert_eq!(verify.damaged_parity_symbols, 1);
+
+        let append_input = tmp.join("append.bin");
+        fs::write(&append_input, b"append").unwrap();
+        let append_err = append_command(&archive, &[&append_input], None, None).unwrap_err();
+        assert!(append_err.to_string().contains("Repair redundancy is damaged"));
+        let harden_err = harden_command(&archive, 10_000, None, None).unwrap_err();
+        assert!(harden_err.to_string().contains("Repair redundancy is damaged"));
 
         let summary = scrub_archives(
             &[&archive],
@@ -607,7 +614,7 @@
         )
         .unwrap();
         assert_eq!(summary.failed, 1);
-        assert_eq!(summary.results[0].status, "fail");
+        assert_eq!(summary.results[0].status, ScrubStatus::RepairNeeded);
 
         let summary = scrub_archives(
             &[&archive],
@@ -623,7 +630,8 @@
         )
         .unwrap();
         assert_eq!(summary.repaired, 1);
-        assert_eq!(summary.results[0].global_fixed, 1);
+        assert_eq!(summary.results[0].repaired_data_symbols, 0);
+        assert_eq!(summary.results[0].repaired_parity_symbols, 1);
         assert!(verify_archive(&archive, None, None).unwrap().parity_ok);
 
         let _ = fs::remove_dir_all(tmp);
@@ -684,10 +692,10 @@
         .unwrap();
         assert_eq!(summary.ok, 1);
         assert_eq!(summary.repaired, 1);
-        assert_eq!(summary.results[0].status, "repaired");
+        assert_eq!(summary.results[0].status, ScrubStatus::Repaired);
 
         let verify = verify_archive(&archive, None, None).unwrap();
-        assert!(verify.ok);
+        assert!(verify.payload_ok);
 
         let _ = fs::remove_dir_all(tmp);
     }
@@ -730,7 +738,7 @@
         assert_eq!(summary.ok, 0);
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.failed, 0);
-        assert_eq!(summary.results[0].status, "skip:locked");
+        assert_eq!(summary.results[0].status, ScrubStatus::Locked);
 
         let _ = fs::remove_dir_all(tmp);
     }
@@ -784,15 +792,15 @@
 
         append_command(&middle, &[&append_src], None, None).unwrap();
         let verify = verify_archive(&middle, None, None).unwrap();
-        assert!(verify.ok);
+        assert!(verify.payload_ok);
 
         let added = harden_command(&middle, 30_000, None, None).unwrap();
         assert!(added > 0);
-        assert!(verify_archive(&archive, None, None).unwrap().ok);
+        assert!(verify_archive(&archive, None, None).unwrap().payload_ok);
 
         let backup = rebuild_command(&middle, None, None).unwrap();
         assert!(backup.exists());
-        assert!(verify_archive(&archive, None, None).unwrap().ok);
+        assert!(verify_archive(&archive, None, None).unwrap().payload_ok);
 
         let listed = list_archive(&archive, None, None).unwrap();
         assert!(
@@ -849,13 +857,13 @@
         rw.flush().unwrap();
         drop(rw);
 
-        assert!(!verify_archive(&archive, None, None).unwrap().ok);
+        assert!(!verify_archive(&archive, None, None).unwrap().payload_ok);
 
         let result = repair_command(&middle, true, None, None, None).unwrap();
         let repaired = result.output_path.unwrap();
         assert_eq!(repaired, tmp.join("repair.amber.repaired"));
-        assert!(verify_archive(&repaired, None, None).unwrap().ok);
-        assert!(!verify_archive(&archive, None, None).unwrap().ok);
+        assert!(verify_archive(&repaired, None, None).unwrap().payload_ok);
+        assert!(!verify_archive(&archive, None, None).unwrap().payload_ok);
 
         let _ = fs::remove_dir_all(tmp);
     }

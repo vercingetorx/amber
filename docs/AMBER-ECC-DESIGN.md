@@ -97,8 +97,10 @@ Notable rules:
 
 - tiny groups enforce a minimum total parity floor of `6`
 - the on-disk global parity scheme name is `amcf`
+- parity-bearing archives must store explicit AMCF scheme metadata
 - hardening increases parity budget canonically
 - repair never promotes guessed data
+- successful repair restores both damaged data symbols and recomputable damaged AMCF parity symbols
 - harden requires a clean archive
 
 ## Practical intent

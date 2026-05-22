@@ -66,7 +66,7 @@ pub struct ListSummary {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifySummary {
-    pub ok: bool,
+    pub payload_ok: bool,
     pub parity_ok: bool,
     pub damaged_data_symbols: usize,
     pub damaged_parity_symbols: usize,
@@ -156,11 +156,50 @@ pub struct ScrubOptions {
     pub harden_extra: usize,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScrubStatus {
+    Ok,
+    Repaired,
+    RepairNeeded,
+    Locked,
+    Failed,
+}
+
+impl ScrubStatus {
+    fn is_ok(self) -> bool {
+        matches!(self, Self::Ok | Self::Repaired)
+    }
+
+    fn is_repaired(self) -> bool {
+        matches!(self, Self::Repaired)
+    }
+
+    fn is_skipped(self) -> bool {
+        matches!(self, Self::Locked)
+    }
+
+    fn is_failed(self) -> bool {
+        matches!(self, Self::Failed | Self::RepairNeeded)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "OK",
+            Self::Repaired => "REPAIRED",
+            Self::RepairNeeded => "REPAIR-NEEDED",
+            Self::Locked => "LOCKED",
+            Self::Failed => "FAILED",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ScrubResult {
     pub path: String,
-    pub status: String,
-    pub global_fixed: usize,
+    pub status: ScrubStatus,
+    pub repaired_data_symbols: usize,
+    pub repaired_parity_symbols: usize,
     pub harden_added: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -395,7 +434,7 @@ pub fn verify_archive(
     drop(reader);
     let health = inspect_archive_health(archive, password, keyfile)?;
     Ok(VerifySummary {
-        ok: health.payload_ok,
+        payload_ok: health.payload_ok,
         parity_ok: health.parity_ok,
         damaged_data_symbols: health.damaged_data.len(),
         damaged_parity_symbols: health.damaged_parity.len(),
@@ -600,9 +639,14 @@ pub fn append_command(
     keyfile: Option<&Path>,
 ) -> AmberResult<()> {
     let verify = verify_archive(&archive, password, keyfile)?;
-    if !verify.ok {
+    if !verify.payload_ok {
         return Err(AmberError::Invalid(
             "Verification failed; run amber repair before appending.".into(),
+        ));
+    }
+    if !verify.parity_ok {
+        return Err(AmberError::Invalid(
+            "Repair redundancy is damaged; run amber repair before appending.".into(),
         ));
     }
     append_to_archive(archive, inputs, password, keyfile)
@@ -632,9 +676,14 @@ pub fn assert_archive_clean_for_harden(
     keyfile: Option<&Path>,
 ) -> AmberResult<()> {
     let verify = verify_archive(&archive, password, keyfile)?;
-    if !verify.ok {
+    if !verify.payload_ok {
         return Err(AmberError::Invalid(
             "Verification failed before harden".into(),
+        ));
+    }
+    if !verify.parity_ok {
+        return Err(AmberError::Invalid(
+            "Repair redundancy is damaged before harden".into(),
         ));
     }
     Ok(())
@@ -694,25 +743,18 @@ pub fn scrub_archives(
         run_scrub_workers(archive_paths, jobs, options)
     };
 
-    let ok = results
-        .iter()
-        .filter(|result| matches!(result.status.as_str(), "ok" | "repaired"))
-        .count();
+    let ok = results.iter().filter(|result| result.status.is_ok()).count();
     let repaired = results
         .iter()
-        .filter(|result| result.status == "repaired")
+        .filter(|result| result.status.is_repaired())
         .count();
     let skipped = results
         .iter()
-        .filter(|result| result.status.starts_with("skip"))
+        .filter(|result| result.status.is_skipped())
         .count();
     let failed = results
         .iter()
-        .filter(|result| {
-            result.status == "fail"
-                || result.status.starts_with("error")
-                || result.status.starts_with("hint")
-        })
+        .filter(|result| result.status.is_failed())
         .count();
 
     Ok(ScrubSummary {
@@ -729,16 +771,15 @@ pub fn format_scrub_summary(summary: &ScrubSummary, quiet: bool) -> String {
     for result in &summary.results {
         if !quiet {
             out.push_str(&format!(
-                "{:8} {} (global={} harden+={})\n",
-                result.status.to_ascii_uppercase(),
+                "{:13} {} (repaired: data={} parity={} harden+={})\n",
+                result.status.label(),
                 result.path,
-                result.global_fixed,
+                result.repaired_data_symbols,
+                result.repaired_parity_symbols,
                 result.harden_added
             ));
         }
-        if result.status.starts_with("hint")
-            && let Some(message) = result.message.as_deref()
-        {
+        if let Some(message) = result.message.as_deref() {
             out.push_str("  ");
             out.push_str(message);
             out.push('\n');
@@ -913,8 +954,9 @@ fn scrub_one(
     let path_text = path.display().to_string();
     let mut result = ScrubResult {
         path: path_text,
-        status: "unknown".into(),
-        global_fixed: 0,
+        status: ScrubStatus::Failed,
+        repaired_data_symbols: 0,
+        repaired_parity_symbols: 0,
         harden_added: 0,
         message: None,
     };
@@ -923,28 +965,28 @@ fn scrub_one(
         Ok(summary) => summary,
         Err(err) => {
             if err.is_rebuild_index_candidate() {
-                result.status = "hint:repair".into();
+                result.status = ScrubStatus::RepairNeeded;
                 result.message = Some(
                     "Index appears inconsistent or corrupted. Run 'amber repair --safe' to rebuild the index and attempt recovery.".into(),
                 );
             } else if is_locked_error(path, &err) {
-                result.status = "skip:locked".into();
+                result.status = ScrubStatus::Locked;
                 result.message =
                     Some("encrypted archive skipped (missing/incorrect credentials)".into());
             } else {
-                result.status = "fail".into();
+                result.status = ScrubStatus::Failed;
                 result.message = Some(err.to_string());
             }
             return result;
         }
     };
 
-    if verify.ok && verify.parity_ok {
-        result.status = "ok".into();
+    if verify.payload_ok && verify.parity_ok {
+        result.status = ScrubStatus::Ok;
         return result;
     }
-    if verify.ok && !verify.parity_ok && !do_repair {
-        result.status = "fail".into();
+    if verify.payload_ok && !verify.parity_ok && !do_repair {
+        result.status = ScrubStatus::RepairNeeded;
         result.message = Some(format!(
             "Payload verified, but repair redundancy is damaged ({} AMCF parity symbol(s)). Run 'amber repair --safe' to restore parity.",
             verify.damaged_parity_symbols
@@ -952,16 +994,14 @@ fn scrub_one(
         return result;
     }
     if !do_repair {
-        if result.status == "unknown" {
-            result.status = "fail".into();
-        }
+        result.status = ScrubStatus::Failed;
         return result;
     }
 
     let target = match safe_target_path(path, safe) {
         Ok(target) => target,
         Err(err) => {
-            result.status = "fail".into();
+            result.status = ScrubStatus::Failed;
             result.message = Some(err.to_string());
             return result;
         }
@@ -974,17 +1014,18 @@ fn scrub_one(
     } {
         Ok(repair) => repair,
         Err(err) => {
-            result.status = "fail".into();
+            result.status = ScrubStatus::Failed;
             result.message = Some(err.to_string());
             return result;
         }
     };
-    result.global_fixed = repair.repaired_data.len() + repair.repaired_parity.len();
+    result.repaired_data_symbols = repair.repaired_data.len();
+    result.repaired_parity_symbols = repair.repaired_parity.len();
 
     match verify_archive(&target, password, keyfile) {
-        Ok(summary) if summary.ok && summary.parity_ok => {}
-        Ok(summary) if summary.ok => {
-            result.status = "fail".into();
+        Ok(summary) if summary.payload_ok && summary.parity_ok => {}
+        Ok(summary) if summary.payload_ok => {
+            result.status = ScrubStatus::Failed;
             result.message = Some(format!(
                 "Payload verified, but repair redundancy is still damaged ({} AMCF parity symbol(s)).",
                 summary.damaged_parity_symbols
@@ -992,11 +1033,11 @@ fn scrub_one(
             return result;
         }
         Ok(_) => {
-            result.status = "fail".into();
+            result.status = ScrubStatus::Failed;
             return result;
         }
         Err(err) => {
-            result.status = "fail".into();
+            result.status = ScrubStatus::Failed;
             result.message = Some(err.to_string());
             return result;
         }
@@ -1006,13 +1047,13 @@ fn scrub_one(
         match append_amcf_parity(&target, harden_ppm, password, keyfile) {
             Ok(added) => result.harden_added = added,
             Err(err) => {
-                result.status = "fail".into();
+                result.status = ScrubStatus::Failed;
                 result.message = Some(err.to_string());
                 return result;
             }
         }
     }
-    result.status = "repaired".into();
+    result.status = ScrubStatus::Repaired;
     result
 }
 
