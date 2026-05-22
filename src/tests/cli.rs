@@ -552,6 +552,84 @@
     }
 
     #[test]
+    fn scrub_treats_damaged_redundancy_as_repairable_health_failure() {
+        let tmp = tempdir();
+        let input = tmp.join("input.bin");
+        let archive = tmp.join("archive.amber");
+        fs::write(&input, vec![0x44u8; 512 * 1024]).unwrap();
+
+        seal_archive(
+            &[&input],
+            &SealOptions {
+                output: Some(archive.clone()),
+                password: None,
+                keyfile: None,
+                compress: false,
+                part_size: None,
+            },
+        )
+        .unwrap();
+        harden_command(&archive, 300_000, None, None).unwrap();
+
+        let mut reader = ArchiveReader::new(&archive);
+        reader.open().unwrap();
+        let target = reader
+            .symbols
+            .iter()
+            .find(|sym| sym.is_parity)
+            .unwrap()
+            .clone();
+        drop(reader);
+
+        let mut rw = LogicalArchiveReader::open_path_rw(&archive).unwrap();
+        rw.seek(SeekFrom::Start(target.offset + 7)).unwrap();
+        rw.write_all(&[0x5A]).unwrap();
+        rw.flush().unwrap();
+        drop(rw);
+
+        let verify = verify_archive(&archive, None, None).unwrap();
+        assert!(verify.ok);
+        assert!(!verify.parity_ok);
+        assert_eq!(verify.damaged_data_symbols, 0);
+        assert_eq!(verify.damaged_parity_symbols, 1);
+
+        let summary = scrub_archives(
+            &[&archive],
+            &ScrubOptions {
+                recursive: false,
+                jobs: 1,
+                password: None,
+                keyfile: None,
+                repair: false,
+                safe: false,
+                harden_extra: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.results[0].status, "fail");
+
+        let summary = scrub_archives(
+            &[&archive],
+            &ScrubOptions {
+                recursive: false,
+                jobs: 1,
+                password: None,
+                keyfile: None,
+                repair: true,
+                safe: false,
+                harden_extra: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.repaired, 1);
+        assert_eq!(summary.results[0].global_fixed, 1);
+        assert!(verify_archive(&archive, None, None).unwrap().parity_ok);
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
     fn scrub_recursive_repairs_multipart_archive() {
         let tmp = tempdir();
         let src = tmp.join("src");

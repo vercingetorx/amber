@@ -477,6 +477,12 @@ fn run(args: Args) -> Result<i32, AmberError> {
                     summary.anchor_fail_count, summary.anchor_total_count,
                 );
             }
+            if summary.ok && !summary.parity_ok {
+                eprintln!(
+                    "Warning: payload verified, but repair redundancy is damaged ({} AMCF parity symbol(s)); run 'amber repair --safe' to restore parity.",
+                    summary.damaged_parity_symbols
+                );
+            }
             println!("{}", if summary.ok { "OK" } else { "FAIL" });
             Ok(if summary.ok { 0 } else { 1 })
         }

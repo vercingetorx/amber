@@ -27,6 +27,15 @@ pub struct ECCRepairResult {
     pub rebuilt_index_parity_symbols: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ArchiveHealth {
+    pub payload_ok: bool,
+    pub parity_ok: bool,
+    pub damaged_data: Vec<u64>,
+    pub damaged_parity: Vec<u64>,
+    pub damaged_data_chunks: usize,
+}
+
 pub fn repair_archive(
     path: impl AsRef<Path>,
     password: Option<&str>,
@@ -52,14 +61,37 @@ pub fn repair_archive_with_progress(
         password,
         keyfile,
         |work_path| repair_work_archive(work_path, password, keyfile, &mut progress),
-        Some(|repair_result: &ECCRepairResult| repair_result.remaining_data_chunks == 0),
+        Some(|repair_result: &ECCRepairResult| {
+            repair_result.remaining_data_chunks == 0 && repair_result.remaining_parity.is_empty()
+        }),
     )?;
-    if result.remaining_data_chunks == 0 {
+    if result.remaining_data_chunks == 0 && result.remaining_parity.is_empty() {
         let mut result = result;
         result.output_path = Some(final_target);
         return Ok(result);
     }
     Ok(result)
+}
+
+pub fn inspect_archive_health(
+    path: impl AsRef<Path>,
+    password: Option<&str>,
+    keyfile: Option<&Path>,
+) -> AmberResult<ArchiveHealth> {
+    let path = path.as_ref();
+    let mut reader = open_reader(path, password, keyfile)?;
+    let payload_ok = reader.verify()?;
+    let mut fh = LogicalArchiveReader::open_path(path)?;
+    let corrupted = detect_corrupted_symbols(&reader, &mut fh)?;
+    let (damaged_data, damaged_parity) = classify_symbol_ids(&reader, &corrupted);
+    let damaged_data_chunks = count_damaged_data_chunks(&reader, &corrupted);
+    Ok(ArchiveHealth {
+        payload_ok,
+        parity_ok: damaged_parity.is_empty(),
+        damaged_data,
+        damaged_parity,
+        damaged_data_chunks,
+    })
 }
 
 pub fn detect_corrupted_symbols(
@@ -241,6 +273,17 @@ fn repair_archive_in_place(
         for fixed in repaired {
             corrupted.remove(&fixed);
         }
+        if count_damaged_data_chunks(reader, &corrupted) == 0 {
+            let repaired = repair_amcf_parity(reader, &mut fh, &corrupted, progress)?;
+            let repaired_set = repaired.iter().copied().collect::<BTreeSet<_>>();
+            let (_data, mut repaired_parity) = classify_symbol_ids(reader, &repaired_set);
+            result.repaired_parity.append(&mut repaired_parity);
+            result.repaired_parity.sort_unstable();
+            result.repaired_parity.dedup();
+            for fixed in repaired {
+                corrupted.remove(&fixed);
+            }
+        }
     } else {
         emit_progress(
             progress,
@@ -260,6 +303,82 @@ fn repair_archive_in_place(
     (result.remaining_data, result.remaining_parity) = classify_symbol_ids(reader, &corrupted);
     result.remaining_data_chunks = count_damaged_data_chunks(reader, &corrupted);
     Ok(result)
+}
+
+fn repair_amcf_parity(
+    reader: &ArchiveReader,
+    fh: &mut LogicalArchiveReader,
+    corrupted: &BTreeSet<u64>,
+    progress: &mut Option<&mut dyn FnMut(String)>,
+) -> AmberResult<Vec<u64>> {
+    let parity_unknowns = corrupted
+        .iter()
+        .copied()
+        .filter(|idx| reader.symbols[*idx as usize].is_parity)
+        .collect::<Vec<_>>();
+    if parity_unknowns.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let group_data_indices = build_group_data_indices(reader)?;
+    let parity_by_symbol = reader
+        .amcf_parities
+        .iter()
+        .map(|parity| (parity.symbol_index, parity))
+        .collect::<BTreeMap<_, _>>();
+    let mut symbol_cache: BTreeMap<u64, Option<Vec<u8>>> = BTreeMap::new();
+    let mut repaired = Vec::new();
+
+    for sym_index in parity_unknowns {
+        let parity = parity_by_symbol.get(&sym_index).ok_or_else(|| {
+            AmberError::Invalid(format!(
+                "AMCF parity symbol {sym_index} is missing parity metadata"
+            ))
+        })?;
+        let (data_indices, _scheme) =
+            group_data_indices.get(&parity.seed_base).ok_or_else(|| {
+                AmberError::Invalid("Global parity references unknown seed_base".into())
+            })?;
+        let combo = sample_amcf_combination(
+            &parity.seed_base,
+            parity.seed_id as usize,
+            data_indices,
+            parity.row_count as usize,
+        )
+        .map_err(AmberError::Invalid)?;
+
+        let mut parity_bytes = vec![0u8; reader.symbol_size as usize];
+        let mut complete = true;
+        for (data_sym, coeff) in combo {
+            let Some(data) = read_symbol_cached(reader, fh, data_sym as u64, &mut symbol_cache)?
+            else {
+                complete = false;
+                break;
+            };
+            gf_add_bytes(
+                &mut parity_bytes,
+                &gf_mul_bytes(&data, coeff),
+            );
+        }
+        if !complete {
+            emit_progress(
+                progress,
+                format!("repair: AMCF could not recompute parity symbol {sym_index}"),
+            );
+            continue;
+        }
+        write_repaired_symbol(reader, fh, sym_index, &parity_bytes, &mut repaired, progress)?;
+    }
+
+    repaired.sort_unstable();
+    repaired.dedup();
+    if !repaired.is_empty() {
+        emit_progress(
+            progress,
+            format!("repair: AMCF repaired {} parity symbol(s)", repaired.len()),
+        );
+    }
+    Ok(repaired)
 }
 
 fn verify_chunk_integrity(

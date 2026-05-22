@@ -3,7 +3,7 @@
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{repair_archive, repair_archive_with_progress};
+    use super::{inspect_archive_health, repair_archive, repair_archive_with_progress};
     use crate::AmberError;
     use crate::append::append_to_archive;
     use crate::archiveio::LogicalArchiveReader;
@@ -725,6 +725,44 @@
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
         assert!(!reader.verify().unwrap());
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn repair_recomputes_corrupted_parity_symbols() {
+        let tmp = tempdir();
+        let archive = build_chunk_repair_archive(&tmp);
+
+        let mut reader = ArchiveReader::new(&archive);
+        reader.open().unwrap();
+        let target = reader
+            .symbols
+            .iter()
+            .find(|sym| sym.is_parity)
+            .unwrap()
+            .clone();
+        drop(reader);
+
+        let mut rw = LogicalArchiveReader::open_path_rw(&archive).unwrap();
+        rw.seek(SeekFrom::Start(target.offset + 10)).unwrap();
+        rw.write_all(&[0xA5]).unwrap();
+        rw.flush().unwrap();
+        drop(rw);
+
+        let health = inspect_archive_health(&archive, None, None).unwrap();
+        assert!(health.payload_ok);
+        assert_eq!(health.damaged_data, Vec::<u64>::new());
+        assert_eq!(health.damaged_parity, vec![target.symbol_index]);
+
+        let result = repair_archive(&archive, None, None, None).unwrap();
+        assert_eq!(result.repaired_data, Vec::<u64>::new());
+        assert_eq!(result.repaired_parity, vec![target.symbol_index]);
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
+
+        let health = inspect_archive_health(&archive, None, None).unwrap();
+        assert!(health.payload_ok);
+        assert!(health.parity_ok);
 
         let _ = fs::remove_dir_all(tmp);
     }

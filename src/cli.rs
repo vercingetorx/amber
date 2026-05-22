@@ -10,7 +10,7 @@ use crate::archiveio::{
 };
 use crate::constants::{CODEC_DEFLATE, FLAG_ENCRYPTED};
 use crate::ecc::repair_archive;
-use crate::repair::repair_archive_with_progress;
+use crate::repair::{inspect_archive_health, repair_archive_with_progress};
 use crate::error::{AmberError, AmberResult};
 use crate::harden::append_amcf_parity;
 use crate::inputscan::scan_inputs;
@@ -67,6 +67,9 @@ pub struct ListSummary {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifySummary {
     pub ok: bool,
+    pub parity_ok: bool,
+    pub damaged_data_symbols: usize,
+    pub damaged_parity_symbols: usize,
     pub anchor_total_count: usize,
     pub anchor_fail_count: usize,
 }
@@ -387,11 +390,17 @@ pub fn verify_archive(
         keyfile.map(Path::to_path_buf),
     );
     reader.open()?;
-    let ok = reader.verify()?;
+    let anchor_total_count = reader.anchor_total_count;
+    let anchor_fail_count = reader.anchor_fail_count;
+    drop(reader);
+    let health = inspect_archive_health(archive, password, keyfile)?;
     Ok(VerifySummary {
-        ok,
-        anchor_total_count: reader.anchor_total_count,
-        anchor_fail_count: reader.anchor_fail_count,
+        ok: health.payload_ok,
+        parity_ok: health.parity_ok,
+        damaged_data_symbols: health.damaged_data.len(),
+        damaged_parity_symbols: health.damaged_parity.len(),
+        anchor_total_count,
+        anchor_fail_count,
     })
 }
 
@@ -910,8 +919,8 @@ fn scrub_one(
         message: None,
     };
 
-    let ok = match verify_archive(path, password, keyfile) {
-        Ok(summary) => summary.ok,
+    let verify = match verify_archive(path, password, keyfile) {
+        Ok(summary) => summary,
         Err(err) => {
             if err.is_rebuild_index_candidate() {
                 result.status = "hint:repair".into();
@@ -926,12 +935,20 @@ fn scrub_one(
                 result.status = "fail".into();
                 result.message = Some(err.to_string());
             }
-            false
+            return result;
         }
     };
 
-    if ok {
+    if verify.ok && verify.parity_ok {
         result.status = "ok".into();
+        return result;
+    }
+    if verify.ok && !verify.parity_ok && !do_repair {
+        result.status = "fail".into();
+        result.message = Some(format!(
+            "Payload verified, but repair redundancy is damaged ({} AMCF parity symbol(s)). Run 'amber repair --safe' to restore parity.",
+            verify.damaged_parity_symbols
+        ));
         return result;
     }
     if !do_repair {
@@ -965,7 +982,15 @@ fn scrub_one(
     result.global_fixed = repair.repaired_data.len() + repair.repaired_parity.len();
 
     match verify_archive(&target, password, keyfile) {
-        Ok(summary) if summary.ok => {}
+        Ok(summary) if summary.ok && summary.parity_ok => {}
+        Ok(summary) if summary.ok => {
+            result.status = "fail".into();
+            result.message = Some(format!(
+                "Payload verified, but repair redundancy is still damaged ({} AMCF parity symbol(s)).",
+                summary.damaged_parity_symbols
+            ));
+            return result;
+        }
         Ok(_) => {
             result.status = "fail".into();
             return result;
