@@ -291,12 +291,11 @@ fn run(args: Args) -> Result<i32, AmberError> {
                         SealProgress::SealingInput(path) => println!("Sealing {}", path.display()),
                         SealProgress::SealingFile {
                             archive_path,
-                            processed_bytes,
-                            total_bytes,
+                            file_index,
+                            total_files,
                         } => {
                             if !quiet {
-                                let pct = (processed_bytes as f64) * 100.0 / (total_bytes as f64);
-                                println!(" {pct:6.2}% sealing: {archive_path}");
+                                println!(" {file_index:>4}/{total_files:<4} sealed: {archive_path}");
                             }
                         }
                         SealProgress::Finalizing => {

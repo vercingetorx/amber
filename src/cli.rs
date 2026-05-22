@@ -43,8 +43,8 @@ pub enum SealProgress {
     SealingInput(PathBuf),
     SealingFile {
         archive_path: String,
-        processed_bytes: u64,
-        total_bytes: u64,
+        file_index: usize,
+        total_files: usize,
     },
     Finalizing,
 }
@@ -286,13 +286,8 @@ pub fn seal_archive_with_progress(
     assert_archive_output_path_clear(&output_fs_path, multipart)?;
 
     let scanned = scan_inputs(inputs)?;
-    let total_bytes = scanned
-        .files
-        .iter()
-        .map(|file| file.size)
-        .sum::<u64>()
-        .max(1);
     let mut processed_bytes = 0u64;
+    let total_files = scanned.files.len();
     let seal_result = (|| -> AmberResult<SealSummary> {
         let mut writer = ArchiveWriter::new(
             &output_fs_path,
@@ -324,7 +319,7 @@ pub fn seal_archive_with_progress(
         for symlink in &scanned.symlinks {
             writer.add_symlink(&symlink.archive_path, &symlink.target)?;
         }
-        for file in &scanned.files {
+        for (file_index, file) in scanned.files.iter().enumerate() {
             writer.add_file(
                 &file.archive_path,
                 &file.fs_path,
@@ -335,8 +330,8 @@ pub fn seal_archive_with_progress(
             processed_bytes = processed_bytes.saturating_add(file.size);
             progress(SealProgress::SealingFile {
                 archive_path: file.archive_path.clone(),
-                processed_bytes,
-                total_bytes,
+                file_index: file_index + 1,
+                total_files,
             });
         }
         progress(SealProgress::Finalizing);
