@@ -445,7 +445,7 @@ fn run(args: Args) -> Result<i32, AmberError> {
                     } => {
                         if !quiet {
                             println!(
-                                " unsealing: {:>4}/{:<4} {}",
+                                " {:>4}/{:<4} unsealed: {}",
                                 processed_files, total_files, archive_path
                             );
                         }
