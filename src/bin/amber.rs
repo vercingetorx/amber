@@ -2,11 +2,13 @@ use std::path::PathBuf;
 
 use amber::AmberError;
 use amber::cli::{
-    ExistsMode, ScrubOptions, SealOptions, SealProgress, UnsealOptions, UnsealProgress,
+    ExistsMode, SalvageOptions, SalvageProgress, ScrubOptions, SealOptions, SealProgress,
+    UnsealOptions, UnsealProgress,
     append_command, archive_error_is_locked, archive_info, assert_archive_clean_for_harden,
     default_repaired_output_path, format_scrub_summary, list_archive, parse_part_size,
     rebuild_command, repair_command_with_progress, scrub_archives, scrub_summary_json,
-    seal_archive_with_progress, unseal_archive_with_progress, verify_archive,
+    seal_archive_with_progress, salvage_archive_with_progress, unseal_archive_with_progress,
+    verify_archive,
 };
 use amber::harden::append_amcf_parity;
 use clap::{Parser, Subcommand};
@@ -52,6 +54,21 @@ enum Command {
         keyfile: Option<PathBuf>,
     },
     Unseal {
+        archive: PathBuf,
+        #[arg(long, default_value = ".")]
+        outdir: PathBuf,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
+        keyfile: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ExistsArg::Rename)]
+        exists: ExistsArg,
+        #[arg(long)]
+        quiet: bool,
+        #[arg()]
+        paths: Vec<String>,
+    },
+    Salvage {
         archive: PathBuf,
         #[arg(long, default_value = ".")]
         outdir: PathBuf,
@@ -459,6 +476,82 @@ fn run(args: Args) -> Result<i32, AmberError> {
                 summary.renamed_entries
             );
             Ok(0)
+        }
+        Command::Salvage {
+            archive,
+            outdir,
+            password,
+            keyfile,
+            exists,
+            quiet,
+            paths,
+        } => {
+            let started = Instant::now();
+            let summary = match salvage_archive_with_progress(
+                &archive,
+                &SalvageOptions {
+                    outdir,
+                    password,
+                    keyfile,
+                    paths,
+                    exists: match exists {
+                        ExistsArg::Overwrite => ExistsMode::Overwrite,
+                        ExistsArg::Skip => ExistsMode::Skip,
+                        ExistsArg::Rename => ExistsMode::Rename,
+                        ExistsArg::Fail => ExistsMode::Fail,
+                    },
+                },
+                |event| match event {
+                    SalvageProgress::StartArchive(path) => {
+                        println!("Salvaging {}", path.display())
+                    }
+                    SalvageProgress::CreatingDir { archive_path } => {
+                        println!("   creating: {archive_path}/");
+                    }
+                    SalvageProgress::SalvagingFile {
+                        archive_path,
+                        processed_files,
+                        total_files,
+                    } => {
+                        if !quiet {
+                            println!(
+                                " salvaging: {:>4}/{:<4} {}",
+                                processed_files, total_files, archive_path
+                            );
+                        }
+                    }
+                    SalvageProgress::SkippingFile {
+                        archive_path,
+                        reason,
+                    } => {
+                        println!("   skipped: {archive_path} ({reason})");
+                    }
+                    SalvageProgress::SkippingExisting { archive_path } => {
+                        println!("   skipped: {archive_path} (exists)");
+                    }
+                    SalvageProgress::RenamedTo { path } => {
+                        println!("      note: renamed to {}", path.display());
+                    }
+                },
+            ) {
+                Ok(summary) => summary,
+                Err(err) => return Err(rewrite_read_only_error(&archive, err)),
+            };
+            let dt = started.elapsed().as_secs_f64().max(0.000_001);
+            let mib = summary.processed_bytes as f64 / (1024.0 * 1024.0);
+            let mbps = mib / dt;
+            println!(
+                "Done: recovered {}/{} files; skipped={} ({:.2} MiB) in {:.1}s; {:.2} MiB/s; dirs={} renamed={}",
+                summary.recovered_files,
+                summary.total_files,
+                summary.skipped_files,
+                mib,
+                dt,
+                mbps,
+                summary.created_dirs,
+                summary.renamed_entries
+            );
+            Ok(if summary.skipped_files == 0 { 0 } else { 1 })
         }
         Command::Verify {
             archive,

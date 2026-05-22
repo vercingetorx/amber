@@ -104,6 +104,26 @@ pub struct UnsealSummary {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SalvageOptions {
+    pub outdir: PathBuf,
+    pub password: Option<String>,
+    pub keyfile: Option<PathBuf>,
+    pub paths: Vec<String>,
+    pub exists: ExistsMode,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SalvageSummary {
+    pub recovered_files: usize,
+    pub skipped_files: usize,
+    pub total_files: usize,
+    pub processed_bytes: u64,
+    pub created_dirs: usize,
+    pub skipped_entries: Vec<String>,
+    pub renamed_entries: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UnsealProgress {
     StartArchive(PathBuf),
     CreatingDir {
@@ -123,6 +143,29 @@ pub enum UnsealProgress {
         archive_path: String,
         processed_files: usize,
         total_files: usize,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SalvageProgress {
+    StartArchive(PathBuf),
+    CreatingDir {
+        archive_path: String,
+    },
+    SalvagingFile {
+        archive_path: String,
+        processed_files: usize,
+        total_files: usize,
+    },
+    SkippingFile {
+        archive_path: String,
+        reason: String,
+    },
+    SkippingExisting {
+        archive_path: String,
+    },
+    RenamedTo {
+        path: PathBuf,
     },
 }
 
@@ -624,6 +667,127 @@ pub fn unseal_archive_with_progress(
         }
     }
 
+    Ok(summary)
+}
+
+pub fn salvage_archive(
+    archive: impl AsRef<Path>,
+    options: &SalvageOptions,
+) -> AmberResult<SalvageSummary> {
+    salvage_archive_with_progress(archive, options, |_| {})
+}
+
+pub fn salvage_archive_with_progress(
+    archive: impl AsRef<Path>,
+    options: &SalvageOptions,
+    mut progress: impl FnMut(SalvageProgress),
+) -> AmberResult<SalvageSummary> {
+    progress(SalvageProgress::StartArchive(archive.as_ref().to_path_buf()));
+    let mut reader = ArchiveReader::new_with_credentials(
+        archive.as_ref(),
+        options.password.clone(),
+        options.keyfile.clone(),
+    );
+    reader.open()?;
+    let wanted = options
+        .paths
+        .iter()
+        .map(|path| crate::pathutil::validate_archive_path(path))
+        .collect::<AmberResult<Vec<_>>>()?;
+    let mut entries = reader.list().to_vec();
+    if !wanted.is_empty() {
+        entries.retain(|entry| {
+            wanted
+                .iter()
+                .any(|path| entry.path == *path || entry.path.starts_with(&format!("{path}/")))
+        });
+    }
+
+    let base_outdir = fs::canonicalize(&options.outdir).or_else(|_| {
+        fs::create_dir_all(&options.outdir)?;
+        fs::canonicalize(&options.outdir)
+    })?;
+    let mut summary = SalvageSummary {
+        total_files: entries.iter().filter(|entry| entry.kind == 0).count(),
+        ..SalvageSummary::default()
+    };
+
+    for entry in entries {
+        let dst = safe_destination(&base_outdir, &entry.path)?;
+        match entry.kind {
+            1 => {
+                prepare_parent(&base_outdir, &dst)?;
+                fs::create_dir_all(&dst)?;
+                assert_within_outdir(&base_outdir, &dst)?;
+                progress(SalvageProgress::CreatingDir {
+                    archive_path: entry.path.clone(),
+                });
+                apply_extracted_metadata(
+                    &dst,
+                    entry.mode,
+                    entry.atime_sec,
+                    entry.atime_nsec,
+                    entry.mtime_sec,
+                    entry.mtime_nsec,
+                )?;
+                summary.created_dirs += 1;
+            }
+            0 => {
+                let actual_dst = resolve_existing_salvage_destination(
+                    &base_outdir,
+                    &dst,
+                    options.exists,
+                    &mut summary,
+                )?;
+                let Some(actual_dst) = actual_dst else {
+                    progress(SalvageProgress::SkippingExisting {
+                        archive_path: entry.path.clone(),
+                    });
+                    continue;
+                };
+                prepare_parent(&base_outdir, &actual_dst)?;
+                let temp_path = salvage_temp_path(&actual_dst)?;
+                let _ = fs::remove_file(&temp_path);
+                progress(SalvageProgress::SalvagingFile {
+                    archive_path: entry.path.clone(),
+                    processed_files: summary.recovered_files + summary.skipped_files + 1,
+                    total_files: summary.total_files,
+                });
+                match reader.extract(&entry, &temp_path) {
+                    Ok(()) => {
+                        assert_within_outdir(&base_outdir, &temp_path)?;
+                        fs::rename(&temp_path, &actual_dst)?;
+                        apply_extracted_metadata(
+                            &actual_dst,
+                            entry.mode,
+                            entry.atime_sec,
+                            entry.atime_nsec,
+                            entry.mtime_sec,
+                            entry.mtime_nsec,
+                        )?;
+                        if actual_dst != dst {
+                            progress(SalvageProgress::RenamedTo {
+                                path: actual_dst.clone(),
+                            });
+                        }
+                        summary.processed_bytes =
+                            summary.processed_bytes.saturating_add(entry.size);
+                        summary.recovered_files += 1;
+                    }
+                    Err(err) => {
+                        let _ = fs::remove_file(&temp_path);
+                        summary.skipped_files += 1;
+                        summary.skipped_entries.push(entry.path.clone());
+                        progress(SalvageProgress::SkippingFile {
+                            archive_path: entry.path.clone(),
+                            reason: err.to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(summary)
 }
 
@@ -1222,6 +1386,57 @@ fn resolve_existing_destination(
             path.display()
         ))),
     }
+}
+
+fn resolve_existing_salvage_destination(
+    base_outdir: &Path,
+    path: &Path,
+    exists: ExistsMode,
+    summary: &mut SalvageSummary,
+) -> AmberResult<Option<PathBuf>> {
+    let exists_now = path.exists() || fs::symlink_metadata(path).is_ok();
+    if !exists_now {
+        return Ok(Some(path.to_path_buf()));
+    }
+    match exists {
+        ExistsMode::Overwrite => {
+            if path.is_dir() && !fs::symlink_metadata(path)?.file_type().is_symlink() {
+                return Err(AmberError::Invalid(format!(
+                    "Cannot overwrite directory with file: {}",
+                    path.display()
+                )));
+            }
+            if fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file() {
+                fs::remove_file(path)?;
+            }
+            Ok(Some(path.to_path_buf()))
+        }
+        ExistsMode::Skip => {
+            summary.skipped_files += 1;
+            Ok(None)
+        }
+        ExistsMode::Rename => {
+            let renamed = next_nonconflicting_path(base_outdir, path)?;
+            summary.renamed_entries += 1;
+            Ok(Some(renamed))
+        }
+        ExistsMode::Fail => Err(AmberError::Invalid(format!(
+            "Destination exists: {}",
+            path.display()
+        ))),
+    }
+}
+
+fn salvage_temp_path(path: &Path) -> AmberResult<PathBuf> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AmberError::Invalid("destination path must be valid UTF-8".into()))?;
+    Ok(parent.join(format!(
+        ".{name}.amber-salvage-{}.tmp",
+        std::process::id()
+    )))
 }
 
 fn next_nonconflicting_path(base_outdir: &Path, path: &Path) -> AmberResult<PathBuf> {

@@ -145,6 +145,15 @@ amber repair out.amber --safe
 amber repair out.amber --password secret
 ```
 
+### Salvage
+
+```bash
+amber salvage out.amber --outdir recovered/
+amber salvage out.amber --outdir recovered/ --password secret
+```
+
+`salvage` extracts only files whose chunks validate completely. Corrupted or incomplete files are skipped, and failed file attempts do not leave partial output under the final filename.
+
 ### Harden
 
 ```bash
@@ -185,7 +194,7 @@ amber seal photos/ --output backup.amber --part-size 700M
 - The base path `backup.amber` names the multipart archive set. It must not coexist with a separate single-file `backup.amber` archive.
 - Segment numbering is contiguous. A missing numbered segment is a hard archive error, not a shorter valid archive.
 - Sealing fails if any conflicting namespace member already exists for that base path, including stale numbered segments.
-- You can open, list, verify, unseal, rebuild, repair, append, and harden a multipart archive from the base path or from any segment path.
+- You can open, list, verify, unseal, salvage, rebuild, repair, append, and harden a multipart archive from the base path or from any segment path.
 - Multipart mutating commands operate on the logical archive and preserve the segmented layout.
 
 ## Compression Tradeoff

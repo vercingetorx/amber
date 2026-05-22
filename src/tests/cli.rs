@@ -4,10 +4,10 @@
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        ExistsMode, ScrubOptions, ScrubStatus, SealOptions, UnsealOptions, append_command, archive_info,
-        default_repaired_output_path, harden_command, list_archive, parse_part_size,
-        rebuild_command, repair_command, scrub_archives, scrub_summary_json, seal_archive,
-        unseal_archive, verify_archive,
+        ExistsMode, SalvageOptions, ScrubOptions, ScrubStatus, SealOptions, UnsealOptions,
+        append_command, archive_info, default_repaired_output_path, harden_command, list_archive,
+        parse_part_size, rebuild_command, repair_command, salvage_archive, scrub_archives,
+        scrub_summary_json, seal_archive, unseal_archive, verify_archive,
     };
     use crate::archiveio::LogicalArchiveReader;
     use crate::constants::{CODEC_DEFLATE, CODEC_NONE, INDEX_FRAME_MAGIC, INDEX_LOC_MAGIC};
@@ -411,6 +411,66 @@
                 .unwrap()
                 .as_secs()
         );
+
+        let _ = fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn salvage_recovers_intact_files_and_skips_corrupted_files() {
+        let tmp = tempdir();
+        let src = tmp.join("src");
+        let archive = tmp.join("salvage.amber");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("good.txt"), b"recover me").unwrap();
+        fs::write(src.join("bad.txt"), b"this file will be damaged").unwrap();
+
+        seal_archive(
+            &[&src],
+            &SealOptions {
+                output: Some(archive.clone()),
+                password: None,
+                keyfile: None,
+                compress: false,
+                part_size: None,
+            },
+        )
+        .unwrap();
+
+        let mut reader = ArchiveReader::new(&archive);
+        reader.open().unwrap();
+        let bad_entry = reader
+            .entries
+            .iter()
+            .find(|entry| entry.path == "src/bad.txt")
+            .unwrap();
+        let bad_chunk = bad_entry.chunks[0].clone();
+        drop(reader);
+
+        let mut rw = LogicalArchiveReader::open_path_rw(&archive).unwrap();
+        rw.seek(SeekFrom::Start(bad_chunk.payload_offset)).unwrap();
+        rw.write_all(&[0xAA]).unwrap();
+        rw.flush().unwrap();
+        drop(rw);
+
+        let outdir = tmp.join("salvaged");
+        let summary = salvage_archive(
+            &archive,
+            &SalvageOptions {
+                outdir: outdir.clone(),
+                password: None,
+                keyfile: None,
+                paths: Vec::new(),
+                exists: ExistsMode::Rename,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.total_files, 2);
+        assert_eq!(summary.recovered_files, 1);
+        assert_eq!(summary.skipped_files, 1);
+        assert_eq!(summary.skipped_entries, vec!["src/bad.txt".to_string()]);
+        assert_eq!(fs::read(outdir.join("src/good.txt")).unwrap(), b"recover me");
+        assert!(!outdir.join("src/bad.txt").exists());
 
         let _ = fs::remove_dir_all(tmp);
     }

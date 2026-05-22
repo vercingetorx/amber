@@ -346,9 +346,9 @@ impl ArchiveReader {
     }
 
     pub fn extract(&mut self, entry: &Entry, out_path: impl AsRef<Path>) -> AmberResult<()> {
-        let Some(file) = self.file.as_mut() else {
+        if self.file.is_none() {
             return Err(AmberError::Invalid("Archive not open".into()));
-        };
+        }
         if entry.kind != 0 {
             return Ok(());
         }
@@ -359,35 +359,7 @@ impl ArchiveReader {
         }
         let mut out = std::fs::File::create(out_path)?;
         for chunk in &entry.chunks {
-            let record = read_record_at_bounded(
-                file,
-                chunk.offset,
-                self.decryptor.as_ref(),
-                chunk.payload_len,
-            )?;
-            if record.rtype != RTYPE_CHUNK {
-                return Err(AmberError::Invalid("Expected chunk record".into()));
-            }
-            let (_eid, _idx, _ulen, codec_id, _flags, tag32, _aux16) =
-                parse_chunk_header_ext(&record.header_ext)?;
-            let codec = Codec::new(codec_id);
-            let raw = codec.decompress(
-                &record.payload,
-                Some(
-                    usize::try_from(chunk.uncompressed_len)
-                        .map_err(|_| AmberError::Invalid("chunk length too large".into()))?,
-                ),
-            )?;
-            if raw.len() as u64 != chunk.uncompressed_len {
-                return Err(AmberError::Invalid(
-                    "Chunk length mismatch after decompress".into(),
-                ));
-            }
-            if blake3_32(&raw) != tag32 {
-                return Err(AmberError::Invalid(
-                    "Chunk tag mismatch; data corrupted".into(),
-                ));
-            }
+            let (_codec_id, raw) = self.read_chunk_plaintext(chunk)?;
             use std::io::Write;
             out.write_all(&raw)?;
         }

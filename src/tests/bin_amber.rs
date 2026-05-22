@@ -138,6 +138,41 @@
     }
 
     #[test]
+    fn salvage_parser_accepts_paths_and_options() {
+        let args = Args::try_parse_from([
+            "amber",
+            "salvage",
+            "broken.amber",
+            "--outdir",
+            "recovered",
+            "--exists",
+            "skip",
+            "photos",
+        ])
+        .unwrap();
+        match args.command {
+            Command::Salvage {
+                archive,
+                outdir,
+                password,
+                keyfile,
+                exists,
+                quiet,
+                paths,
+            } => {
+                assert_eq!(archive, PathBuf::from("broken.amber"));
+                assert_eq!(outdir, PathBuf::from("recovered"));
+                assert_eq!(password, None);
+                assert_eq!(keyfile, None);
+                assert!(matches!(exists, super::ExistsArg::Skip));
+                assert!(!quiet);
+                assert_eq!(paths, vec!["photos".to_string()]);
+            }
+            other => panic!("unexpected command parse: {other:?}"),
+        }
+    }
+
+    #[test]
     fn append_parser_accepts_interspersed_options_after_input_paths() {
         let args = Args::try_parse_from([
             "amber",
