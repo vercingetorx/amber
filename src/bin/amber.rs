@@ -163,9 +163,9 @@ fn format_repair_report(
     }
     lines.push(format!(
         "Repair summary: {} repaired ({} AMCF), {} unrepaired",
-        result.amcf_repaired.len(),
-        result.amcf_repaired.len(),
-        result.remaining_corrupted.len()
+        result.repaired_data.len() + result.repaired_parity.len(),
+        result.repaired_data.len() + result.repaired_parity.len(),
+        result.remaining_data.len() + result.remaining_parity.len()
     ));
     if result.detected_data_chunks > 0 {
         lines.push(format!(
@@ -173,27 +173,42 @@ fn format_repair_report(
             result.detected_data_chunks
         ));
     }
-    if !result.amcf_repaired.is_empty() {
-        lines.push(format!("AMCF repaired symbols: {:?}", result.amcf_repaired));
+    if !result.repaired_data.is_empty() {
+        lines.push(format!("AMCF repaired data symbols: {:?}", result.repaired_data));
     }
-    if !result.remaining_corrupted.is_empty() {
+    if !result.repaired_parity.is_empty() {
+        lines.push(format!(
+            "AMCF repaired parity symbols: {:?}",
+            result.repaired_parity
+        ));
+    }
+    if !result.remaining_data.is_empty() || !result.remaining_parity.is_empty() {
         if result.remaining_data_chunks > 0 {
             lines.push(format!(
                 "Remaining damaged data chunks: {}",
                 result.remaining_data_chunks
             ));
         }
-        lines.push(format!(
-            "Unrepaired symbols: {:?}",
-            result.remaining_corrupted
-        ));
+        if !result.remaining_data.is_empty() {
+            lines.push(format!("Unrepaired data symbols: {:?}", result.remaining_data));
+        }
+        if !result.remaining_parity.is_empty() {
+            lines.push(format!(
+                "Unrepaired parity symbols: {:?}",
+                result.remaining_parity
+            ));
+        }
         lines.push(
             "Reason: surviving ECC was insufficient to recover the remaining corrupted symbols."
                 .into(),
         );
         lines.push("This archive is still damaged.".into());
     }
-    if result.amcf_repaired.is_empty() && result.remaining_corrupted.is_empty() {
+    if result.repaired_data.is_empty()
+        && result.repaired_parity.is_empty()
+        && result.remaining_data.is_empty()
+        && result.remaining_parity.is_empty()
+    {
         lines.push("No corruption detected".into());
     }
     if let Some(count) = result.rebuilt_index_parity_symbols {

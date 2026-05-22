@@ -962,7 +962,7 @@ fn scrub_one(
             return result;
         }
     };
-    result.global_fixed = repair.amcf_repaired.len();
+    result.global_fixed = repair.repaired_data.len() + repair.repaired_parity.len();
 
     match verify_archive(&target, password, keyfile) {
         Ok(summary) if summary.ok => {}

@@ -64,7 +64,7 @@ This repository is the Rust reference implementation. It provides:
 
 This benchmark uses a `236`-chunk archive with `40` repair chunks. Each cell shows how many damaged data chunks were fully recovered before the first observed failure. Higher is better.
 
-| Damage pattern | AMCF | Interleaved overlapping window Reed-Solomon | LRP + RaptorQ |
+| Damage pattern | AMCF | Interleaved overlapping windowed Reed-Solomon | LRP + RaptorQ |
 |---|---:|---:|---:|
 | Random scattered damage, light repair-chunk damage | 33 | 17 | 11 |
 | Random scattered damage, heavier repair-chunk damage | 28 | 17 | 10 |

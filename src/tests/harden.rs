@@ -191,8 +191,8 @@
         drop(rw);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(result.remaining_corrupted.is_empty());
-        assert!(result.amcf_repaired.len() >= victims.len());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
+        assert!(result.repaired_data.len() >= victims.len());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();

@@ -184,8 +184,10 @@
     fn format_repair_report_mentions_rebuild_before_repair() {
         let text = format_repair_report(
             &ECCRepairResult {
-                amcf_repaired: vec![7],
-                remaining_corrupted: Vec::new(),
+                repaired_data: vec![7],
+                repaired_parity: Vec::new(),
+                remaining_data: Vec::new(),
+                remaining_parity: Vec::new(),
                 detected_data_chunks: 1,
                 remaining_data_chunks: 0,
                 output_path: None,
@@ -194,7 +196,7 @@
             None,
         );
         assert!(text.contains("Repair summary: 1 repaired (1 AMCF), 0 unrepaired"));
-        assert!(text.contains("AMCF repaired symbols: [7]"));
+        assert!(text.contains("AMCF repaired data symbols: [7]"));
         assert!(text.contains("Rebuilt index metadata (26 AMCF parity symbol(s))"));
     }
 
@@ -202,8 +204,10 @@
     fn format_repair_report_failed_amcf_hint_does_not_suggest_hardening() {
         let text = format_repair_report(
             &ECCRepairResult {
-                amcf_repaired: Vec::new(),
-                remaining_corrupted: vec![1, 2, 3],
+                repaired_data: Vec::new(),
+                repaired_parity: Vec::new(),
+                remaining_data: vec![1, 2],
+                remaining_parity: vec![3],
                 detected_data_chunks: 2,
                 remaining_data_chunks: 2,
                 output_path: None,

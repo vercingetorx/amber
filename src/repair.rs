@@ -17,8 +17,10 @@ use crate::tlv::{get_list, get_map, get_string, get_u64};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ECCRepairResult {
-    pub amcf_repaired: Vec<u64>,
-    pub remaining_corrupted: Vec<u64>,
+    pub repaired_data: Vec<u64>,
+    pub repaired_parity: Vec<u64>,
+    pub remaining_data: Vec<u64>,
+    pub remaining_parity: Vec<u64>,
     pub detected_data_chunks: usize,
     pub remaining_data_chunks: usize,
     pub output_path: Option<PathBuf>,
@@ -233,9 +235,10 @@ fn repair_archive_in_place(
                 corrupted.len()
             ),
         );
-        let amcf_fixed = repair_amcf(reader, &mut fh, &corrupted, progress)?;
-        result.amcf_repaired = amcf_fixed.clone();
-        for fixed in amcf_fixed {
+        let repaired = repair_amcf(reader, &mut fh, &corrupted, progress)?;
+        let repaired_set = repaired.iter().copied().collect::<BTreeSet<_>>();
+        (result.repaired_data, result.repaired_parity) = classify_symbol_ids(reader, &repaired_set);
+        for fixed in repaired {
             corrupted.remove(&fixed);
         }
     } else {
@@ -249,12 +252,12 @@ fn repair_archive_in_place(
     }
     fh.flush()?;
     fh.sync()?;
-    if result.amcf_repaired.is_empty() {
+    if result.repaired_data.is_empty() && result.repaired_parity.is_empty() {
         emit_progress(progress, "repair: no symbol writeback performed".to_owned());
     } else {
         emit_progress(progress, "repair: writeback complete".to_owned());
     }
-    result.remaining_corrupted = corrupted.iter().copied().collect();
+    (result.remaining_data, result.remaining_parity) = classify_symbol_ids(reader, &corrupted);
     result.remaining_data_chunks = count_damaged_data_chunks(reader, &corrupted);
     Ok(result)
 }
@@ -627,6 +630,23 @@ fn count_damaged_data_chunks(reader: &ArchiveReader, symbol_indices: &BTreeSet<u
         chunk_offsets.insert(sym.record_offset);
     }
     chunk_offsets.len()
+}
+
+fn classify_symbol_ids(
+    reader: &ArchiveReader,
+    symbol_indices: &BTreeSet<u64>,
+) -> (Vec<u64>, Vec<u64>) {
+    let mut data = Vec::new();
+    let mut parity = Vec::new();
+    for idx in symbol_indices {
+        let sym = &reader.symbols[*idx as usize];
+        if sym.is_parity {
+            parity.push(*idx);
+        } else {
+            data.push(*idx);
+        }
+    }
+    (data, parity)
 }
 
 fn build_group_data_indices(

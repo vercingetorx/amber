@@ -245,7 +245,7 @@
         drop(broken);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(!result.amcf_repaired.is_empty());
+        assert!(!result.repaired_data.is_empty());
         assert_eq!(result.remaining_data_chunks, 0);
         assert!(result.output_path.is_some());
 
@@ -318,17 +318,7 @@
         drop(fh);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        if !result.remaining_corrupted.is_empty() {
-            let mut reader = ArchiveReader::new(&archive);
-            reader.open().unwrap();
-            let remaining_data = result
-                .remaining_corrupted
-                .iter()
-                .filter(|idx| !reader.symbols[**idx as usize].is_parity)
-                .copied()
-                .collect::<Vec<_>>();
-            assert!(remaining_data.is_empty());
-        }
+        assert!(result.remaining_data.is_empty());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -423,9 +413,9 @@
         drop(fh);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        let fixed = result.amcf_repaired.iter().copied().collect::<std::collections::BTreeSet<_>>();
+        let fixed = result.repaired_data.iter().copied().collect::<std::collections::BTreeSet<_>>();
         assert!(targets.iter().any(|target| fixed.contains(target)));
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -483,7 +473,7 @@
         drop(fh);
 
         let result = repair_archive(&archive, Some(password), None, None).unwrap();
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
 
         let mut reader = ArchiveReader::new_with_credentials(&archive, Some(password.into()), None);
         reader.open().unwrap();
@@ -607,17 +597,7 @@
         drop(rw);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        if !result.remaining_corrupted.is_empty() {
-            let mut reader = ArchiveReader::new(&archive);
-            reader.open().unwrap();
-            let remaining_data = result
-                .remaining_corrupted
-                .iter()
-                .filter(|idx| !reader.symbols[**idx as usize].is_parity)
-                .copied()
-                .collect::<Vec<_>>();
-            assert!(remaining_data.is_empty());
-        }
+        assert!(result.remaining_data.is_empty());
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
         assert!(reader.verify().unwrap());
@@ -729,7 +709,7 @@
             repair_archive_with_progress(&archive, None, None, None, Some(&mut progress)).unwrap();
         let after = fs::read(&archive).unwrap();
 
-        assert!(result.amcf_repaired.is_empty());
+        assert!(result.repaired_data.is_empty());
         assert!(result.output_path.is_none());
         assert_eq!(result.rebuilt_index_parity_symbols, None);
         assert!(result.remaining_data_chunks > 0);
@@ -820,7 +800,7 @@
         corrupt_random_chunks(&archive, 3, Some(7), 0, false, None, None).unwrap();
         let result = repair_archive(&archive, None, None, None).unwrap();
 
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
         assert!(result.detected_data_chunks > 0);
 
         let mut reader = ArchiveReader::new(&archive);
@@ -838,7 +818,7 @@
         corrupt_chunk_window(&archive, 2, 3, 0, false, None, None).unwrap();
         let result = repair_archive(&archive, None, None, None).unwrap();
 
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
         assert!(result.detected_data_chunks > 0);
 
         let mut reader = ArchiveReader::new(&archive);
@@ -878,7 +858,7 @@
         corrupt_random_chunks(&archive, 4, Some(17), 0, false, None, None).unwrap();
         let result = repair_archive(&archive, None, None, None).unwrap();
 
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
         assert!(result.detected_data_chunks >= 1);
 
         let mut reader = ArchiveReader::new(&archive);
@@ -925,7 +905,7 @@
         drop(fh);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -966,17 +946,11 @@
         drop(rw);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(!result.amcf_repaired.is_empty());
+        assert!(!result.repaired_data.is_empty());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
-        let remaining_data = result
-            .remaining_corrupted
-            .iter()
-            .filter(|idx| !reader.symbols[**idx as usize].is_parity)
-            .copied()
-            .collect::<Vec<_>>();
-        assert!(remaining_data.is_empty());
+        assert!(result.remaining_data.is_empty());
         assert!(reader.verify().unwrap());
 
         let _ = fs::remove_dir_all(tmp);
@@ -1065,7 +1039,7 @@
         drop(rw);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -1138,7 +1112,7 @@
         drop(rw);
 
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -1203,7 +1177,7 @@
 
         corrupt_random_chunks(&archive, 2, Some(5), 0, false, None, None).unwrap();
         let result = repair_archive(&archive, None, None, None).unwrap();
-        assert!(result.remaining_corrupted.is_empty());
+        assert!(result.remaining_data.is_empty() && result.remaining_parity.is_empty());
         assert!(result.detected_data_chunks > 0);
 
         let mut reader = ArchiveReader::new(&archive);
@@ -1259,7 +1233,7 @@
         );
 
         let repair = repair_archive(&archive, Some("secret"), None, None).unwrap();
-        assert!(!repair.amcf_repaired.is_empty());
+        assert!(!repair.repaired_data.is_empty());
 
         let added =
             crate::harden::append_amcf_parity(&archive, 300_000, Some("secret"), None).unwrap();

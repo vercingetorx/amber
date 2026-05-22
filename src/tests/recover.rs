@@ -476,15 +476,7 @@
         assert!(rebuild_count > 0);
         let result = repair_archive(&archive, None, None, None).unwrap();
 
-        let mut reader = ArchiveReader::new(&archive);
-        reader.open().unwrap();
-        let remaining_data = result
-            .remaining_corrupted
-            .iter()
-            .filter(|idx| !reader.symbols[**idx as usize].is_parity)
-            .copied()
-            .collect::<Vec<_>>();
-        assert!(remaining_data.is_empty());
+        assert!(result.remaining_data.is_empty());
 
         let _ = fs::remove_dir_all(tmp);
     }
