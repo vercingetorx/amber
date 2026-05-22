@@ -1,12 +1,29 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::amcfspatial::{
     AMCF_PHASE_ANCHOR, AMCF_PHASE_FANOUT, amcf_outer_target_degree_floor, amcf_spatial_plan,
-    amcf_spatial_sparse_positions,
 };
-use crate::gf256::gf_pow;
+use crate::coprime::coprime_from_start;
+use crate::gf256::{gf_inv, gf_mul, gf_pow};
+use crate::hashutil::blake3_32;
 
 pub const AMCF_PHASE_OUTER: &str = "amcf-outer";
 pub const AMCF_PHASE_MICRO: &str = "amcf-micro";
 pub const AMCF_MICRO_MAX_ROWS: usize = 6;
+const AMCF_DENSE_MAX_ROWS: usize = AMCF_OUTER_FRACTIONS.len();
+
+const AMCF_OUTER_FRACTIONS: &[(usize, usize)] = &[
+    (5, 8),
+    (21, 32),
+    (21, 32),
+    (21, 32),
+    (21, 32),
+    (21, 32),
+    (2, 3),
+    (11, 16),
+];
+const AMCF_BRIDGE_QUOTA: usize = 6;
+const AMCF_BRIDGE_LANE_COUNT: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AmcfPlan {
@@ -31,47 +48,17 @@ pub fn amcf_plan(n: usize, row_count: usize) -> AmcfPlan {
             outer_target_sizes: Vec::new(),
         };
     }
-    if row_count == 1 {
-        let target = n.min(1usize.max(((2 * n) as f64 / 3.0).ceil() as usize));
-        return AmcfPlan {
-            body_row_count: 0,
-            outer_row_count: 1,
-            outer_target_sizes: vec![target],
-        };
-    }
-    if row_count <= AMCF_MICRO_MAX_ROWS {
+    if row_count <= AMCF_DENSE_MAX_ROWS {
         return AmcfPlan {
             body_row_count: 0,
             outer_row_count: row_count,
             outer_target_sizes: vec![n; row_count],
         };
     }
-
-    let mut outer_row_count = if row_count <= 8 && n <= 48 {
-        2usize.min(row_count - 1)
-    } else {
-        3usize.min(1usize.max(row_count / 8))
-    };
-    let mut body_row_count = row_count - outer_row_count;
-    if body_row_count == 0 {
-        body_row_count = 1;
-        outer_row_count = row_count - body_row_count;
-    }
-    let base_degree = amcf_outer_target_degree_floor(n);
-    let outer_target_sizes = match outer_row_count {
-        1 => vec![n.min(base_degree.max(((2 * n) as f64 / 3.0).ceil() as usize))],
-        2 => vec![
-            n.min(base_degree.max((n as f64 / 2.0).ceil() as usize)),
-            n.min(base_degree.max(((2 * n) as f64 / 3.0).ceil() as usize)),
-        ],
-        _ => vec![
-            n.min(base_degree.max((n as f64 / 3.0).ceil() as usize)),
-            n.min(base_degree.max((n as f64 / 2.0).ceil() as usize)),
-            n.min(base_degree.max(((2 * n) as f64 / 3.0).ceil() as usize)),
-        ],
-    };
+    let outer_target_sizes = amcf_outer_target_sizes(n);
+    let outer_row_count = outer_target_sizes.len();
     AmcfPlan {
-        body_row_count,
+        body_row_count: row_count.saturating_sub(outer_row_count),
         outer_row_count,
         outer_target_sizes,
     }
@@ -82,15 +69,15 @@ pub fn amcf_phase_for_row(
     row_count: usize,
     row_id: usize,
 ) -> Result<&'static str, String> {
-    let plan = amcf_plan(n, row_count);
     if row_id >= row_count {
         return Err("row_id out of range for AMCF phase lookup".into());
     }
-    if row_count <= AMCF_MICRO_MAX_ROWS {
+    if row_count <= AMCF_DENSE_MAX_ROWS {
         return Ok(AMCF_PHASE_MICRO);
     }
+    let plan = amcf_plan(n, row_count);
     if row_id < plan.body_row_count {
-        let body_plan = amcf_spatial_plan(n, 1usize.max(plan.body_row_count));
+        let body_plan = amcf_spatial_plan(n, plan.body_row_count.max(1));
         return Ok(if row_id < body_plan.phase1_rows {
             AMCF_PHASE_ANCHOR
         } else {
@@ -115,15 +102,7 @@ pub fn amcf_positions(
     if row_id >= row_count {
         return Err("row_id out of range for AMCF row generation".into());
     }
-    if row_count <= AMCF_MICRO_MAX_ROWS {
-        return Ok((0..n).collect());
-    }
-    let plan = amcf_plan(n, row_count);
-    if row_id < plan.body_row_count {
-        return amcf_spatial_sparse_positions(row_id, n, plan.body_row_count);
-    }
-    let outer_index = row_id - plan.body_row_count;
-    balanced_outer_positions(n, outer_index, row_id, plan.outer_target_sizes[outer_index])
+    Ok(amcf_positions_by_row(n, row_count)?[row_id].clone())
 }
 
 pub fn amcf_row_structure(
@@ -135,9 +114,7 @@ pub fn amcf_row_structure(
     let positions = amcf_positions(seed_base, row_id, n, row_count)?;
     let phase = amcf_phase_for_row(n, row_count, row_id)?;
     let plan = amcf_plan(n, row_count);
-    let target_size = if row_count <= AMCF_MICRO_MAX_ROWS {
-        n
-    } else if row_id < plan.body_row_count {
+    let target_size = if row_count <= AMCF_MICRO_MAX_ROWS || row_id < plan.body_row_count {
         positions.len()
     } else {
         plan.outer_target_sizes[row_id - plan.body_row_count]
@@ -151,7 +128,7 @@ pub fn amcf_row_structure(
 }
 
 pub fn sample_amcf_combination(
-    seed_base: &[u8],
+    _seed_base: &[u8],
     seed_id: usize,
     data_indices: &[usize],
     row_count: usize,
@@ -165,18 +142,227 @@ pub fn sample_amcf_combination(
     if row_count <= AMCF_MICRO_MAX_ROWS {
         return micro_vandermonde_combination(seed_id, data_indices);
     }
-    let positions = amcf_positions(seed_base, seed_id, data_indices.len(), row_count)?;
-    Ok(positions
-        .into_iter()
-        .enumerate()
-        .map(|(ordinal, pos)| {
-            (
-                data_indices[pos],
-                amcf_position_coefficient(seed_id, ordinal, pos)
-                    .expect("AMCF coefficient generation must be non-zero"),
-            )
+    if row_count <= AMCF_DENSE_MAX_ROWS {
+        return dense_amcf_combination(seed_id, data_indices);
+    }
+    if seed_id >= row_count {
+        return Err("seed_id out of range for AMCF sampling".into());
+    }
+    let rows = amcf_combinations_by_row(data_indices, row_count)?;
+    Ok(rows[seed_id].clone())
+}
+
+fn amcf_outer_target_sizes(n: usize) -> Vec<usize> {
+    let floor = amcf_outer_target_degree_floor(n);
+    AMCF_OUTER_FRACTIONS
+        .iter()
+        .map(|(numerator, denominator)| {
+            n.min(floor.max((numerator * n).div_ceil(*denominator)))
         })
-        .collect())
+        .collect()
+}
+
+fn amcf_positions_by_row(n: usize, row_count: usize) -> Result<Vec<Vec<usize>>, String> {
+    if n == 0 {
+        return Ok(vec![Vec::new(); row_count]);
+    }
+    if row_count == 0 {
+        return Err("row_count must be positive for AMCF row generation".into());
+    }
+    if row_count <= AMCF_DENSE_MAX_ROWS {
+        return Ok((0..row_count).map(|_| (0..n).collect()).collect());
+    }
+
+    let outer_targets = amcf_outer_target_sizes(n);
+    let outer_count = outer_targets.len();
+    if row_count <= outer_count {
+        return Err("AMCF requires more rows than its outer row count".into());
+    }
+    let body_count = row_count - outer_count;
+    let mut rows = Vec::with_capacity(row_count);
+    for row_id in 0..row_count {
+        if row_id < body_count {
+            rows.push(amcf_body_positions(row_id, n, body_count)?);
+        } else {
+            let outer_index = row_id - body_count;
+            rows.push(balanced_outer_positions(
+                n,
+                outer_index,
+                row_id,
+                outer_targets[outer_index],
+            )?);
+        }
+    }
+    Ok(rows)
+}
+
+fn amcf_body_positions(row_id: usize, n: usize, body_count: usize) -> Result<Vec<usize>, String> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if body_count == 0 {
+        return Err("body_count must be positive for AMCF row generation".into());
+    }
+    if row_id >= body_count {
+        return Err("row_id out of range for AMCF row generation".into());
+    }
+
+    let target = n.min(amcf_spatial_plan(n, body_count).degree.max(1));
+    let root = (n as f64).sqrt().round() as usize;
+    let unit_size = 1usize.max((target * 2).max(n.div_ceil(root.max(1))));
+    let unit_count = 1usize.max(n.div_ceil(unit_size));
+    let home_unit = row_id % unit_count;
+    let local_start = home_unit * unit_size;
+    let local_span = 1usize.max(unit_size.min(n - local_start));
+    let coverage_quota = target.min(n.div_ceil(body_count));
+    let local_quota = (target - coverage_quota).min(1usize.max(target.div_ceil(4)));
+    let bridge_quota = (target - coverage_quota - local_quota).min(AMCF_BRIDGE_QUOTA);
+    let neighbor_quota = (target - coverage_quota - local_quota)
+        .min(2usize.max(target.div_ceil(2)))
+        .saturating_sub(bridge_quota);
+
+    let mut seen = BTreeSet::new();
+    let mut positions = Vec::with_capacity(target);
+
+    for pos in (row_id % body_count..n).step_by(body_count) {
+        append_position(&mut positions, &mut seen, pos, n, target);
+        if positions.len() >= coverage_quota {
+            break;
+        }
+    }
+
+    let lane_count = 2usize.max(4usize.min((local_span as f64).sqrt().ceil() as usize));
+    let lane = row_id % lane_count;
+    let local_step = coprime_from_start(1 + row_id + target, local_span);
+    for ordinal in 0..local_span {
+        let offset = (lane + ordinal * local_step) % local_span;
+        append_position(
+            &mut positions,
+            &mut seen,
+            local_start + offset,
+            n,
+            target,
+        );
+        if positions.len() >= coverage_quota + local_quota {
+            break;
+        }
+    }
+
+    let bridge_goal = coverage_quota + local_quota + bridge_quota;
+    append_bridge_positions(
+        &mut positions,
+        &mut seen,
+        BridgePlacement {
+            n,
+            target,
+            row_id,
+            body_count,
+            unit_size,
+            home_unit,
+            goal: bridge_goal,
+        },
+    );
+
+    let neighbor_goal = bridge_goal + neighbor_quota;
+    let neighbor_step = coprime_from_start(1 + row_id * 2 + target, unit_count.max(1));
+    let mut arm = 0usize;
+    while positions.len() < neighbor_goal && arm < unit_count.max(1) * 2 {
+        let direction = if arm.is_multiple_of(2) { -1isize } else { 1isize };
+        let distance = 1 + ((arm / 2) * neighbor_step) % unit_count.max(1);
+        let target_unit = ((home_unit as isize + direction * distance as isize)
+            .rem_euclid(unit_count as isize)) as usize;
+        let start = target_unit * unit_size;
+        let span = 1usize.max(unit_size.min(n - start));
+        let intra_step = coprime_from_start(1 + row_id + arm + target, span);
+        let offset = (row_id * 3 + arm * 5) % span;
+        append_position(
+            &mut positions,
+            &mut seen,
+            start + offset * intra_step,
+            n,
+            target,
+        );
+        arm += 1;
+    }
+
+    let global_step = coprime_from_start(1 + row_id * 2 + target * 3, n);
+    let global_offset = ((row_id * n) / body_count + row_id * row_id + target) % n;
+    for ordinal in 0..n {
+        append_position(
+            &mut positions,
+            &mut seen,
+            global_offset + ordinal * global_step,
+            n,
+            target,
+        );
+        if positions.len() >= target {
+            break;
+        }
+    }
+
+    if positions.len() != target {
+        return Err("AMCF placement failed".into());
+    }
+    positions.sort_unstable();
+    Ok(positions)
+}
+
+struct BridgePlacement {
+    n: usize,
+    target: usize,
+    row_id: usize,
+    body_count: usize,
+    unit_size: usize,
+    home_unit: usize,
+    goal: usize,
+}
+
+fn append_bridge_positions(
+    positions: &mut Vec<usize>,
+    seen: &mut BTreeSet<usize>,
+    placement: BridgePlacement,
+) {
+    let phase = placement.row_id / 2;
+    let mut lane = placement.row_id % AMCF_BRIDGE_LANE_COUNT;
+    let mut attempts = 0usize;
+    while positions.len() < placement.goal && attempts < AMCF_BRIDGE_LANE_COUNT * 4 {
+        let lo = (lane * placement.n) / AMCF_BRIDGE_LANE_COUNT;
+        let hi = ((lane + 1) * placement.n) / AMCF_BRIDGE_LANE_COUNT;
+        let width = 1usize.max(hi - lo);
+        let slope = coprime_from_start(
+            1 + phase * 6 + placement.target * 5 + placement.body_count,
+            placement.n.max(1),
+        );
+        let offset = (phase * phase
+            + slope * lane
+            + attempts * (2 * placement.row_id + 1)
+            + 17 * placement.target)
+            % width;
+        let candidate = placement.n - 1 - (lo + offset);
+        let unit_count = placement.n.div_ceil(placement.unit_size).saturating_sub(1);
+        let candidate_unit = (candidate / placement.unit_size).min(unit_count);
+        if candidate_unit != placement.home_unit || attempts >= AMCF_BRIDGE_LANE_COUNT {
+            append_position(positions, seen, candidate, placement.n, placement.target);
+        }
+        lane = (lane + 1) % AMCF_BRIDGE_LANE_COUNT;
+        attempts += 1;
+    }
+}
+
+fn append_position(
+    positions: &mut Vec<usize>,
+    seen: &mut BTreeSet<usize>,
+    idx: usize,
+    n: usize,
+    target: usize,
+) {
+    if positions.len() >= target {
+        return;
+    }
+    let candidate = idx % n;
+    if seen.insert(candidate) {
+        positions.push(candidate);
+    }
 }
 
 fn balanced_outer_positions(
@@ -222,6 +408,18 @@ fn micro_vandermonde_combination(
     Ok(combo)
 }
 
+fn dense_amcf_combination(seed_id: usize, data_indices: &[usize]) -> Result<Vec<(usize, u8)>, String> {
+    data_indices
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(position, data_index)| {
+            amcf_position_coefficient(seed_id, position, position)
+                .map(|coefficient| (data_index, coefficient))
+        })
+        .collect()
+}
+
 fn amcf_position_coefficient(row_id: usize, ordinal: usize, position: usize) -> Result<u8, String> {
     let base = (((position + row_id + ordinal) % 255) + 1) as u8;
     let exponent = (1 + ((row_id + ordinal) % 11)) as u32;
@@ -231,3 +429,131 @@ fn amcf_position_coefficient(row_id: usize, ordinal: usize, position: usize) -> 
     }
     Ok(coeff)
 }
+
+fn amcf_combinations_by_row(
+    data_indices: &[usize],
+    row_count: usize,
+) -> Result<Vec<Vec<(usize, u8)>>, String> {
+    let positions_by_row = amcf_positions_by_row(data_indices.len(), row_count)?;
+    let mut previous_rows: Vec<BTreeMap<usize, u8>> = Vec::with_capacity(row_count);
+    let mut rows = Vec::with_capacity(row_count);
+
+    for (row_id, positions) in positions_by_row.iter().enumerate() {
+        if row_count <= AMCF_MICRO_MAX_ROWS {
+            let row = micro_vandermonde_combination(row_id, data_indices)?;
+            previous_rows.push(
+                row.iter()
+                    .enumerate()
+                    .map(|(position, (_symbol_index, coeff))| (position, *coeff))
+                    .collect(),
+            );
+            rows.push(row);
+            continue;
+        }
+        let preferred = positions
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(ordinal, position)| amcf_position_coefficient(row_id, ordinal, position))
+            .collect::<Result<Vec<_>, _>>()?;
+        let coefficients = no4_coefficients(row_id, positions, &preferred, &previous_rows)?;
+        let row = positions
+            .iter()
+            .copied()
+            .zip(coefficients.iter().copied())
+            .map(|(position, coefficient)| (data_indices[position], coefficient))
+            .collect::<Vec<_>>();
+        previous_rows.push(
+            positions
+                .iter()
+                .copied()
+                .zip(coefficients.into_iter())
+                .collect(),
+        );
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn no4_coefficients(
+    row_id: usize,
+    support: &[usize],
+    preferred_coefficients: &[u8],
+    previous_rows: &[BTreeMap<usize, u8>],
+) -> Result<Vec<u8>, String> {
+    let mut coefficients: BTreeMap<usize, u8> = BTreeMap::new();
+    let mut output = Vec::with_capacity(support.len());
+    for (ordinal, (&position, &preferred)) in support.iter().zip(preferred_coefficients).enumerate()
+    {
+        let mut forbidden = BTreeSet::from([0u8]);
+        for previous in previous_rows {
+            let Some(previous_at_position) = previous.get(&position).copied() else {
+                continue;
+            };
+            for (&shared_position, &coefficient) in &coefficients {
+                let Some(previous_at_shared) = previous.get(&shared_position).copied() else {
+                    continue;
+                };
+                forbidden.insert(gf_mul(
+                    coefficient,
+                    gf_mul(previous_at_position, gf_inv(previous_at_shared)),
+                ));
+            }
+        }
+        let mut selected = None;
+        for candidate in coefficient_candidate_stream(row_id, ordinal, position, preferred) {
+            if !forbidden.contains(&candidate) {
+                selected = Some(candidate);
+                break;
+            }
+        }
+        let Some(coefficient) = selected else {
+            return Err("GF(256) exhausted while applying AMCF no4 coefficients".into());
+        };
+        coefficients.insert(position, coefficient);
+        output.push(coefficient);
+    }
+    Ok(output)
+}
+
+fn coefficient_candidate_stream(
+    row_id: usize,
+    ordinal: usize,
+    position: usize,
+    preferred: u8,
+) -> Vec<u8> {
+    let mut candidates = Vec::with_capacity(255);
+    if preferred != 0 {
+        candidates.push(preferred);
+    }
+
+    let mut seed = Vec::with_capacity(32);
+    seed.extend_from_slice(b"AMCF-NO4");
+    seed.extend_from_slice(&(row_id as u32).to_le_bytes());
+    seed.extend_from_slice(&(ordinal as u32).to_le_bytes());
+    seed.extend_from_slice(&(position as u32).to_le_bytes());
+    let digest = blake3_32(&seed);
+    let mut state = u64::from_le_bytes(digest[..8].try_into().expect("digest prefix is 8 bytes"));
+    for _ in 0..512 {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let candidate = (((state >> 32) % 255) + 1) as u8;
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+        if candidates.len() == 255 {
+            break;
+        }
+    }
+    for candidate in 1..=255u8 {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+#[cfg(test)]
+#[path = "tests/amcfadaptive.rs"]
+mod tests;

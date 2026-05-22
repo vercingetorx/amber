@@ -88,6 +88,8 @@ Index/trailer:
 - contains manifest, chunk map, symbol map, ECC metadata, anchors, and top-level commitments
 - stored as redundant trailer frames plus locator records
 
+ECC metadata records the global parity scheme as `amcf`. The scheme identifies Amber's canonical AMCF-ECC construction for the archive; it is not an operator-selectable profile set.
+
 ## Canonical multipart form
 
 Multipart archives are one logical archive split across multiple physical files:

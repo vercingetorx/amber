@@ -14,8 +14,9 @@ It is Amber’s production archive ECC regime: a deterministic `GF(256)` code de
 At a high level it combines:
 
 - dense algebra where tiny systems need raw rank
-- larger structured parity generation for bigger groups
-- explicit cleanup rank where sparse-style recovery alone is insufficient
+- continuous archive-wide parity geometry for larger groups
+- local, bridge, neighbor, and outer-row structure under one deterministic construction
+- coefficient selection that avoids proportional two-row/two-symbol overlaps
 
 ## Design constraints
 
@@ -60,6 +61,24 @@ Larger groups:
 
 One regime shape does not serve all of those equally well, so AMCF uses scale-appropriate construction under one deterministic family.
 
+## Construction shape
+
+For standard groups, AMCF generates parity rows over one ordered symbol line instead of fixed independent windows.
+
+Body rows contain:
+
+- a deterministic coverage sweep, so every row contributes to archive-wide coverage
+- local positions inside a home unit, so small localized damage has nearby equations
+- bridge positions that cross away from the home unit, so local failures are tied into the wider field
+- neighbor-unit positions, so adjacent regions are coupled without hard window boundaries
+- deterministic global fill to complete the row degree
+
+Outer rows are denser deterministic rows with fixed target fractions of the archive. They provide broad cleanup rank when sparse body rows are not enough.
+
+Small groups use dense rows because the dominant problem is raw equation rank, not spatial geometry.
+
+AMCF also applies deterministic nonzero `GF(256)` coefficients. For standard groups it chooses coefficients row-by-row so no two rows have proportional restrictions on any pair of shared symbols. That removes a common sparse-matrix rank failure without adding damage-profile-specific repair rules.
+
 ## Operational properties
 
 AMCF is designed to support:
@@ -77,6 +96,7 @@ Amber uses one production ECC policy.
 Notable rules:
 
 - tiny groups enforce a minimum total parity floor of `6`
+- the on-disk global parity scheme name is `amcf`
 - hardening increases parity budget canonically
 - repair never promotes guessed data
 - harden requires a clean archive

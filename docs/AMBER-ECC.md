@@ -11,7 +11,10 @@ Short summary:
 - operates over stored bytes
 - supports plaintext and encrypted archives
 - uses one canonical policy rather than multiple operator-selectable ECC modes
+- uses continuous archive-wide parity geometry rather than fixed repair windows
 
-Tiny groups enforce a minimum total parity floor of `6` rows.
+For standard groups, AMCF combines coverage sweep, local structure, bridge links, neighbor links, dense outer rows, and deterministic coefficient selection. Tiny groups use dense rows and enforce a minimum total parity floor of `6` rows.
+
+The on-disk global parity scheme name is `amcf`.
 
 Use [AMBER-ECC-DESIGN.md](./AMBER-ECC-DESIGN.md) for the architecture document.

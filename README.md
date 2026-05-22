@@ -44,8 +44,6 @@ This repository is the Rust reference implementation. It provides:
 - Canonical mutations.
   - Append, harden, rebuild, and successful repair commit one new canonical archive image.
   - Failed mutations do not leave stale live trailer generations behind.
-- Hard to beat ECC.
-  - In internal benchmarks, AMCF-ECC recovered more data in nearly every loss scenario than both a strengthened interleaved-overlap Reed-Solomon design and an LRP + RaptorQ-class approach. Where RS and RX failed catastrophically beyond their recovery limits, AMCF degraded gracefully.
 
 ## Overview
 
@@ -58,9 +56,23 @@ This repository is the Rust reference implementation. It provides:
   - `AMCF-ECC` = Adaptive Multi-Scale Continuous-Field ECC
   - one deterministic `GF(256)` archive ECC family over storage bytes
   - tiny groups enforce a minimum total parity floor
-  - standard groups scale from local structure to broader coupled parity coverage
+  - standard groups use a continuous archive-wide field with coverage sweep, local structure, bridge links, neighbor links, and dense outer rows
 - Optional whole-archive encryption with XChaCha20-Poly1305 and Argon2id.
   - When enabled, all records are AEAD-protected, including parity and anchors.
+
+## ECC Benchmark Snapshot
+
+This benchmark uses a `236`-chunk archive with `40` repair chunks. Each cell shows how many damaged data chunks were fully recovered before the first observed failure. Higher is better.
+
+| Damage pattern | AMCF | Interleaved overlapping window Reed-Solomon | LRP + RaptorQ |
+|---|---:|---:|---:|
+| Random scattered damage, light repair-chunk damage | 33 | 17 | 11 |
+| Random scattered damage, heavier repair-chunk damage | 28 | 17 | 10 |
+| One contiguous damaged region, light repair-chunk damage | 33 | 30 | 6 |
+| One contiguous damaged region, heavier repair-chunk damage | 18 | 25 | 4 |
+| Damage at the end of the archive, heavier repair-chunk damage | 29 | 29 | 4 |
+
+`AMCF` is the strongest general-purpose result. Reed-Solomon retains a narrow advantage on one contiguous-damage case, but loses badly on scattered damage and does not match AMCF across the broader archive-damage frontier.
 
 ## Quick Start
 
