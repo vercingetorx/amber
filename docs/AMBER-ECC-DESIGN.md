@@ -77,7 +77,7 @@ Outer rows are denser deterministic rows with fixed target fractions of the arch
 
 Small groups use dense rows because the dominant problem is raw equation rank, not spatial geometry.
 
-AMCF also applies deterministic nonzero `GF(256)` coefficients. For standard groups it chooses coefficients row-by-row so no two rows have proportional restrictions on any pair of shared symbols. That removes a common sparse-matrix rank failure without adding damage-profile-specific repair rules.
+AMCF also applies deterministic nonzero `GF(256)` coefficients. When the data-symbol count plus parity-row count fits the field, AMCF uses distinct Cauchy row and column tags, giving exact non-proportional restrictions on every pair of shared symbols. Larger standard groups cannot satisfy that pairwise condition as a universal invariant over 255 nonzero field values, especially in dense outer rows, so AMCF does not use no4 as a best-effort rule there. It uses its deterministic position coefficient law directly and relies on AMCF's row geometry, outer-row density, and repair solver rank rather than an impossible global no4 claim.
 
 ## Operational properties
 

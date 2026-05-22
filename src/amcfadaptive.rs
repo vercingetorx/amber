@@ -1,11 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::amcfspatial::{
     AMCF_PHASE_ANCHOR, AMCF_PHASE_FANOUT, amcf_outer_target_degree_floor, amcf_spatial_plan,
 };
 use crate::coprime::coprime_from_start;
-use crate::gf256::{gf_inv, gf_mul, gf_pow};
-use crate::hashutil::blake3_32;
+use crate::gf256::{gf_inv, gf_pow};
 
 pub const AMCF_PHASE_OUTER: &str = "amcf-outer";
 pub const AMCF_PHASE_MICRO: &str = "amcf-micro";
@@ -435,123 +434,54 @@ fn amcf_combinations_by_row(
     row_count: usize,
 ) -> Result<Vec<Vec<(usize, u8)>>, String> {
     let positions_by_row = amcf_positions_by_row(data_indices.len(), row_count)?;
-    let mut previous_rows: Vec<BTreeMap<usize, u8>> = Vec::with_capacity(row_count);
     let mut rows = Vec::with_capacity(row_count);
+    let use_cauchy_coefficients = data_indices.len() + row_count <= 256;
 
     for (row_id, positions) in positions_by_row.iter().enumerate() {
         if row_count <= AMCF_MICRO_MAX_ROWS {
             let row = micro_vandermonde_combination(row_id, data_indices)?;
-            previous_rows.push(
-                row.iter()
-                    .enumerate()
-                    .map(|(position, (_symbol_index, coeff))| (position, *coeff))
-                    .collect(),
-            );
             rows.push(row);
             continue;
         }
-        let preferred = positions
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(ordinal, position)| amcf_position_coefficient(row_id, ordinal, position))
-            .collect::<Result<Vec<_>, _>>()?;
-        let coefficients = no4_coefficients(row_id, positions, &preferred, &previous_rows)?;
+        let coefficients = if use_cauchy_coefficients {
+            positions
+                .iter()
+                .copied()
+                .map(|position| cauchy_position_coefficient(row_id, position, data_indices.len()))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            positions
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(ordinal, position)| amcf_position_coefficient(row_id, ordinal, position))
+                .collect::<Result<Vec<_>, _>>()?
+        };
         let row = positions
             .iter()
             .copied()
             .zip(coefficients.iter().copied())
             .map(|(position, coefficient)| (data_indices[position], coefficient))
             .collect::<Vec<_>>();
-        previous_rows.push(
-            positions
-                .iter()
-                .copied()
-                .zip(coefficients.into_iter())
-                .collect(),
-        );
         rows.push(row);
     }
     Ok(rows)
 }
 
-fn no4_coefficients(
+fn cauchy_position_coefficient(
     row_id: usize,
-    support: &[usize],
-    preferred_coefficients: &[u8],
-    previous_rows: &[BTreeMap<usize, u8>],
-) -> Result<Vec<u8>, String> {
-    let mut coefficients: BTreeMap<usize, u8> = BTreeMap::new();
-    let mut output = Vec::with_capacity(support.len());
-    for (ordinal, (&position, &preferred)) in support.iter().zip(preferred_coefficients).enumerate()
-    {
-        let mut forbidden = BTreeSet::from([0u8]);
-        for previous in previous_rows {
-            let Some(previous_at_position) = previous.get(&position).copied() else {
-                continue;
-            };
-            for (&shared_position, &coefficient) in &coefficients {
-                let Some(previous_at_shared) = previous.get(&shared_position).copied() else {
-                    continue;
-                };
-                forbidden.insert(gf_mul(
-                    coefficient,
-                    gf_mul(previous_at_position, gf_inv(previous_at_shared)),
-                ));
-            }
-        }
-        let mut selected = None;
-        for candidate in coefficient_candidate_stream(row_id, ordinal, position, preferred) {
-            if !forbidden.contains(&candidate) {
-                selected = Some(candidate);
-                break;
-            }
-        }
-        let Some(coefficient) = selected else {
-            return Err("GF(256) exhausted while applying AMCF no4 coefficients".into());
-        };
-        coefficients.insert(position, coefficient);
-        output.push(coefficient);
-    }
-    Ok(output)
-}
-
-fn coefficient_candidate_stream(
-    row_id: usize,
-    ordinal: usize,
     position: usize,
-    preferred: u8,
-) -> Vec<u8> {
-    let mut candidates = Vec::with_capacity(255);
-    if preferred != 0 {
-        candidates.push(preferred);
+    data_count: usize,
+) -> Result<u8, String> {
+    let row_tag = data_count + row_id;
+    if row_tag > 255 || position > 255 {
+        return Err("AMCF Cauchy coefficient tags exceed GF(256)".into());
     }
-
-    let mut seed = Vec::with_capacity(32);
-    seed.extend_from_slice(b"AMCF-NO4");
-    seed.extend_from_slice(&(row_id as u32).to_le_bytes());
-    seed.extend_from_slice(&(ordinal as u32).to_le_bytes());
-    seed.extend_from_slice(&(position as u32).to_le_bytes());
-    let digest = blake3_32(&seed);
-    let mut state = u64::from_le_bytes(digest[..8].try_into().expect("digest prefix is 8 bytes"));
-    for _ in 0..512 {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let candidate = (((state >> 32) % 255) + 1) as u8;
-        if !candidates.contains(&candidate) {
-            candidates.push(candidate);
-        }
-        if candidates.len() == 255 {
-            break;
-        }
+    let denominator = (row_tag as u8) ^ (position as u8);
+    if denominator == 0 {
+        return Err("AMCF Cauchy coefficient generation produced zero denominator".into());
     }
-    for candidate in 1..=255u8 {
-        if !candidates.contains(&candidate) {
-            candidates.push(candidate);
-        }
-    }
-    candidates
+    Ok(gf_inv(denominator))
 }
 
 #[cfg(test)]
