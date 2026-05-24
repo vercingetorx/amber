@@ -82,13 +82,29 @@ Record stream:
 - self-delimiting records with CRC-protected headers
 - carries entry declarations, chunk payloads, anchors, and parity records
 
+Anchor records:
+
+- carry a bounded tail sample of symbol metadata
+- commit the archive UUID, MDS scheme, symbol size, symbol counts, seed base, and Merkle root
+- include a BLAKE3 metadata-checkpoint hash over those fields
+- are encrypted and authenticated when the archive is encrypted
+- are validation inputs for rebuild, not a competing metadata authority
+
 Index/trailer:
 
 - written at finalize time
 - contains manifest, chunk map, symbol map, ECC metadata, anchors, and top-level commitments
 - stored as redundant trailer frames plus locator records
 
-ECC metadata records the global parity scheme as `amcf`. The scheme identifies Amber's canonical AMCF-ECC construction for the archive; it is not an operator-selectable profile set. Archives with parity symbols must carry explicit AMCF metadata and an explicit scheme. Mutation code does not infer missing ECC metadata for parity-bearing archives.
+ECC metadata records the global parity scheme as `mds`. The scheme identifies Amber's canonical MDS-ECC construction for the archive; it is not an operator-selectable profile set.
+
+Parity-bearing archives must carry:
+
+- explicit MDS metadata
+- an explicit scheme name
+- the committed symbol size for the protected set
+
+Mutation code does not infer missing ECC metadata for parity-bearing archives. Rebuild may recover the committed symbol size from surviving anchors or parity records, then reconstruct the index around that committed value.
 
 ## Canonical multipart form
 
@@ -135,6 +151,6 @@ That rule applies to:
 - append
 - harden
 - rebuild
-- successful repair with no remaining damaged data chunks or AMCF parity symbols
+- successful repair with no remaining damaged data chunks or MDS parity symbols
 
 Failed mutation must not leave a partially committed canonical archive image behind.

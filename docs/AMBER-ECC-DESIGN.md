@@ -1,37 +1,38 @@
-# AMCF-ECC Design
+# MDS-ECC Design
 
 Status:
 
 - current production ECC design for Amber
 - canonical architecture document
 
-## What AMCF-ECC is
+## What MDS-ECC is
 
-`AMCF-ECC` means Adaptive Multi-Scale Continuous-Field ECC.
+`MDS-ECC` is Amber's global maximum-distance-separable archive ECC.
 
-It is Amber’s production archive ECC regime: a deterministic `GF(256)` code designed for real archive damage, not a neat fixed packet block.
+Amber splits stored archive bytes into fixed-size symbols. It then emits dense global repair symbols using a deterministic Cauchy matrix over `GF(2^16)`.
 
-At a high level it combines:
+For a protected set with `N` data symbols and `R` available repair symbols, the recovery guarantee is:
 
-- dense algebra where tiny systems need raw rank
-- continuous archive-wide parity geometry for larger groups
-- local, bridge, neighbor, and outer-row structure under one deterministic construction
-- coefficient selection that avoids proportional two-row/two-symbol overlaps
+```text
+recover any R erased or corrupt data symbols
+```
+
+That is the maximum possible full-recovery guarantee for `R` repair symbols.
 
 ## Design constraints
 
 Amber ECC must satisfy all of these at once:
 
 - deterministic encode and decode behavior
-- appendable archive growth
 - parity over stored bytes
 - compatibility with canonical rewrite-on-commit mutation
 - repair after mixed data and parity damage
 - stable archive metadata needed for reimplementation years later
+- no best-effort coefficient fallback or geometry special case
 
 ## Storage domain
 
-AMCF protects stored bytes.
+MDS protects stored bytes.
 
 That means:
 
@@ -45,49 +46,43 @@ Implication:
 - compressed chunks often fail as whole chunks after even a small byte error
 - uncompressed storage keeps the practical damage unit smaller
 
-## Why AMCF is multi-regime
+## Construction
 
-Archive groups fail differently at different scales.
+For `N` data symbols and `R` repair rows, Amber requires:
 
-Tiny groups:
+```text
+N + R <= 65,536
+```
 
-- fail like small linear systems
-- are dominated by equation count and rank
+The implementation assigns Cauchy tags as:
 
-Larger groups:
+```text
+column_tag[i] = i
+row_tag[r]    = N + r
+```
 
-- need better locality and broader resilience together
-- must tolerate random loss, localized loss, and mixed damage
+The coefficient for repair row `r` and data symbol `i` is:
 
-One regime shape does not serve all of those equally well, so AMCF uses scale-appropriate construction under one deterministic family.
+```text
+inverse(row_tag[r] XOR column_tag[i]) in GF(2^16)
+```
 
-## Construction shape
+Because all row tags are distinct, all column tags are distinct, and the two tag ranges are disjoint under the bound above, every square submatrix of the Cauchy matrix is nonsingular. That is the MDS property.
 
-For standard groups, AMCF generates parity rows over one ordered symbol line instead of fixed independent windows.
-
-Body rows contain:
-
-- a deterministic coverage sweep, so every row contributes to archive-wide coverage
-- local positions inside a home unit, so small localized damage has nearby equations
-- bridge positions that cross away from the home unit, so local failures are tied into the wider field
-- neighbor-unit positions, so adjacent regions are coupled without hard window boundaries
-- deterministic global fill to complete the row degree
-
-Outer rows are denser deterministic rows with fixed target fractions of the archive. They provide broad cleanup rank when sparse body rows are not enough.
-
-Small groups use dense rows because the dominant problem is raw equation rank, not spatial geometry.
-
-AMCF also applies deterministic nonzero `GF(256)` coefficients. When the data-symbol count plus parity-row count fits the field, AMCF uses distinct Cauchy row and column tags, giving exact non-proportional restrictions on every pair of shared symbols. Larger standard groups cannot satisfy that pairwise condition as a universal invariant over 255 nonzero field values, especially in dense outer rows, so AMCF does not use no4 as a best-effort rule there. It uses its deterministic position coefficient law directly and relies on AMCF's row geometry, outer-row density, and repair solver rank rather than an impossible global no4 claim.
+Each repair symbol is dense: it contains one `GF(2^16)` linear combination of every data symbol, applied lane-by-lane across the stored symbol bytes.
 
 ## Operational properties
 
-AMCF is designed to support:
+MDS supports:
 
 - seal-time parity generation
-- append without rewriting prior groups
-- later hardening that adds new parity budget canonically
-- repair that uses the archive’s committed ECC metadata
+- later hardening that appends additional repair rows canonically
+- repair that uses the archive's committed ECC metadata
 - recovery when trailer/index metadata must first be rebuilt from surviving records
+
+Hardening does not change existing row definitions. Row `r` is always the same Cauchy row for a given data-symbol count. Adding parity appends later rows.
+
+The archive commits its symbol size in ECC metadata and anchor records. Anchor records also contain a compact metadata checkpoint: archive UUID, symbol size, MDS scheme, symbol counts, seed base, Merkle root, and a BLAKE3 hash over those fields. Rebuild uses validated checkpoints or parity records to recover the committed symbol size before reconstructing the symbol table.
 
 ## Canonical policy
 
@@ -95,22 +90,26 @@ Amber uses one production ECC policy.
 
 Notable rules:
 
-- tiny groups enforce a minimum total parity floor of `6`
-- the on-disk global parity scheme name is `amcf`
-- parity-bearing archives must store explicit AMCF scheme metadata
+- the on-disk global parity scheme name is `mds`
+- parity-bearing archives must store explicit MDS scheme metadata
 - hardening increases parity budget canonically
 - repair never promotes guessed data
-- successful repair restores both damaged data symbols and recomputable damaged AMCF parity symbols
+- metadata checkpoints either validate exactly or are ignored as damaged
+- successful repair restores both damaged data symbols and recomputable damaged MDS parity symbols
 - harden requires a clean archive
 
-## Practical intent
+## Scaling
 
-AMCF is not trying to be the prettiest block code on paper.
+The code is global over archive symbols, not individual bytes. Symbol size is the scaling knob.
 
-It is trying to be strong under the damage Amber actually faces:
+For large archives, Amber must choose a symbol size such that:
 
-- random symbol loss
-- contiguous windows and bursts
-- tail damage
-- mixed data and parity damage
-- metadata-first survivability failures
+```text
+data_symbols + repair_symbols <= 65,536
+```
+
+Splitting into independent recovery sets weakens the global recovery guarantee and is not the canonical design.
+
+The writer chooses symbol size before emitting records. It uses codec-specific stored-size upper bounds, not observed compression output guesses, because the MDS tag-space requirement must be satisfied before parity generation starts.
+
+The default symbol size is `64 KiB`. Larger archives use larger symbols as needed. If the required symbol size would exceed the on-disk parity payload length field, archive creation fails explicitly.

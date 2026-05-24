@@ -8,7 +8,7 @@ Purpose:
 
 ## Recovery goals
 
-- maximize the probability of full archive recovery after realistic storage damage
+- provide exact full archive recovery whenever damage is within the committed MDS repair budget
 - when full recovery is impossible, maximize verified structural recovery
 - never promote guessed or weakly inferred data as valid recovered output
 
@@ -42,6 +42,7 @@ Phase 1: surviving-structure discovery
 
 - locate surviving trailer/index frames and locators
 - locate surviving anchors
+- validate anchor metadata checkpoints
 - scan records forward when the trailer is absent or untrusted
 
 Phase 2: damage localization
@@ -57,7 +58,7 @@ Phase 3: structural repair
 
 Phase 4: content reconstruction
 
-- apply the archive ECC to damaged or missing regions
+- apply the archive MDS code to damaged or missing stored symbols
 - preserve verified good data and minimize unnecessary rewriting
 
 Phase 5: verification and promotion
@@ -75,8 +76,12 @@ Phase 6: post-recovery hardening
   - recovery remains possible when one or both trailer copies are gone
 - metadata reconstruction
   - reader state can be rebuilt from surviving records
+- checkpoint validation
+  - metadata checkpoints are accepted only when their archive UUID, symbol counts, symbol size, MDS identity, Merkle root, and checkpoint hash agree
 - parity-aware repair
   - repair handles damaged data and damaged parity together
+- MDS-bound correctness
+  - if `R` repair symbols survive, any `R` damaged data symbols in the protected set are recoverable
 - encryption-aware recovery
   - encrypted archives require correct credentials for encrypted content recovery
 - canonical promotion

@@ -21,8 +21,8 @@ pub struct IndexLimits {
     pub max_ecc_groups: usize,
     pub max_symbols: usize,
     pub max_total_symbols: usize,
-    pub max_amcf_parity: usize,
-    pub max_total_amcf_parity: usize,
+    pub max_mds_parity: usize,
+    pub max_total_mds_parity: usize,
     pub max_total_anchors: usize,
     pub max_total_segments: usize,
 }
@@ -35,8 +35,8 @@ impl Default for IndexLimits {
             max_ecc_groups: 100_000,
             max_symbols: 5_000_000,
             max_total_symbols: 5_000_000,
-            max_amcf_parity: 5_000_000,
-            max_total_amcf_parity: 5_000_000,
+            max_mds_parity: 5_000_000,
+            max_total_mds_parity: 5_000_000,
             max_total_anchors: 100_000,
             max_total_segments: 100_000,
         }
@@ -165,24 +165,24 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                 2,
                 &varint_encode(get_u64(group, "symbol_size").unwrap_or(0)),
             )?);
-            let amcf = get_map(group, "amcf");
-            let mut amcf_payload = Vec::new();
-            if let Some(amcf) = amcf {
-                if let Some(seed_base) = get_bytes(amcf, "seed_base") {
-                    require_nonempty_bytes("ecc_groups.amcf.seed_base", seed_base)?;
-                    amcf_payload.extend(tlv(1, seed_base)?);
+            let mds = get_map(group, "mds");
+            let mut mds_payload = Vec::new();
+            if let Some(mds) = mds {
+                if let Some(seed_base) = get_bytes(mds, "seed_base") {
+                    require_nonempty_bytes("ecc_groups.mds.seed_base", seed_base)?;
+                    mds_payload.extend(tlv(1, seed_base)?);
                 }
-                amcf_payload.extend(tlv(
+                mds_payload.extend(tlv(
                     2,
-                    &varint_encode(get_u64(amcf, "epsilon_ppm").unwrap_or(0)),
+                    &varint_encode(get_u64(mds, "epsilon_ppm").unwrap_or(0)),
                 )?);
-                if let Some(scheme) = get_string(amcf, "scheme") {
+                if let Some(scheme) = get_string(mds, "scheme") {
                     if !scheme.is_empty() {
-                        amcf_payload.extend(tlv(7, scheme.as_bytes())?);
+                        mds_payload.extend(tlv(7, scheme.as_bytes())?);
                     }
                 }
                 let mut parity_payload = Vec::new();
-                if let Some(parity_list) = get_list(amcf, "parity") {
+                if let Some(parity_list) = get_list(mds, "parity") {
                     for parity in parity_list {
                         let mut pp = Vec::new();
                         pp.extend(tlv(
@@ -202,11 +202,11 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                             &varint_encode(get_u64(parity, "length").unwrap_or(0)),
                         )?);
                         if let Some(tag) = get_bytes(parity, "tag32") {
-                            require_nonempty_bytes("ecc_groups.amcf.parity.tag32", tag)?;
+                            require_nonempty_bytes("ecc_groups.mds.parity.tag32", tag)?;
                             pp.extend(tlv(5, tag)?);
                         }
                         if let Some(seed_base) = get_bytes(parity, "seed_base") {
-                            require_nonempty_bytes("ecc_groups.amcf.parity.seed_base", seed_base)?;
+                            require_nonempty_bytes("ecc_groups.mds.parity.seed_base", seed_base)?;
                             pp.extend(tlv(6, seed_base)?);
                         }
                         if let Some(row_count) = get_u64(parity, "row_count") {
@@ -216,12 +216,12 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                     }
                 }
                 if !parity_payload.is_empty() {
-                    amcf_payload.extend(tlv(3, &parity_payload)?);
+                    mds_payload.extend(tlv(3, &parity_payload)?);
                 }
             } else {
-                amcf_payload.extend(tlv(2, &varint_encode(0))?);
+                mds_payload.extend(tlv(2, &varint_encode(0))?);
             }
-            group_payload.extend(tlv(4, &amcf_payload)?);
+            group_payload.extend(tlv(4, &mds_payload)?);
 
             let mut symbols_payload = Vec::new();
             if let Some(symbols) = get_list(group, "symbols") {
@@ -332,7 +332,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
     let mut segments = Vec::new();
     let mut total_chunks = 0usize;
     let mut total_symbols = 0usize;
-    let mut total_amcf_parity = 0usize;
+    let mut total_mds_parity = 0usize;
 
     for (tag, payload) in iter_tlvs(data)? {
         match tag {
@@ -499,7 +499,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                     }
                     let mut group = TlvMap::new();
                     let mut symbols = Vec::new();
-                    let mut amcf = map_of([("parity", TlvValue::List(Vec::new()))]);
+                    let mut mds = map_of([("parity", TlvValue::List(Vec::new()))]);
                     for (gt, gv) in iter_tlvs(gpl)? {
                         match gt {
                             1 => {
@@ -601,17 +601,17 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                                                     }
                                                 }
                                                 plist.push(pd);
-                                                if plist.len() > limits.max_amcf_parity {
+                                                if plist.len() > limits.max_mds_parity {
                                                     return Err(AmberError::Invalid(
-                                                        "Index exceeds max AMCF parity limit"
+                                                        "Index exceeds max MDS parity limit"
                                                             .into(),
                                                     ));
                                                 }
-                                                total_amcf_parity += 1;
-                                                if total_amcf_parity > limits.max_total_amcf_parity
+                                                total_mds_parity += 1;
+                                                if total_mds_parity > limits.max_total_mds_parity
                                                 {
                                                     return Err(AmberError::Invalid(
-                                                        "Index exceeds max total AMCF parity limit"
+                                                        "Index exceeds max total MDS parity limit"
                                                             .into(),
                                                     ));
                                                 }
@@ -621,7 +621,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                                     }
                                 }
                                 local.insert("parity".into(), TlvValue::List(plist));
-                                amcf = local;
+                                mds = local;
                             }
                             5 => {
                                 for (st, sv) in iter_tlvs(gv)? {
@@ -700,7 +700,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                         }
                     }
                     group.insert("symbols".into(), TlvValue::List(symbols));
-                    group.insert("amcf".into(), TlvValue::Map(amcf));
+                    group.insert("mds".into(), TlvValue::Map(mds));
                     ecc_groups.push(group);
                 }
             }
@@ -807,10 +807,9 @@ pub fn dumps_anchor(anchor: &TlvMap) -> AmberResult<Vec<u8>> {
         2,
         &varint_encode(get_u64(anchor, "symbol_size").unwrap_or(0)),
     )?);
-    if let Some(root) = get_bytes(anchor, "merkle_root") {
-        require_nonempty_bytes("anchor.merkle_root", root)?;
-        out.extend(tlv(3, root)?);
-    }
+    let root = req_bytes(anchor, "merkle_root")?;
+    require_nonempty_bytes("anchor.merkle_root", root)?;
+    out.extend(tlv(3, root)?);
     if let Some(seed_base) = get_bytes(anchor, "seed_base") {
         require_nonempty_bytes("anchor.seed_base", seed_base)?;
         out.extend(tlv(4, seed_base)?);
@@ -820,6 +819,24 @@ pub fn dumps_anchor(anchor: &TlvMap) -> AmberResult<Vec<u8>> {
             out.extend(tlv(6, scheme.as_bytes())?);
         }
     }
+    let archive_uuid = req_bytes(anchor, "archive_uuid")?;
+    require_nonempty_bytes("anchor.archive_uuid", archive_uuid)?;
+    out.extend(tlv(7, archive_uuid)?);
+    out.extend(tlv(
+        8,
+        &varint_encode(req_u64(anchor, "total_symbol_count")?),
+    )?);
+    out.extend(tlv(
+        9,
+        &varint_encode(req_u64(anchor, "data_symbol_count")?),
+    )?);
+    out.extend(tlv(
+        10,
+        &varint_encode(req_u64(anchor, "parity_symbol_count")?),
+    )?);
+    let checkpoint_hash = req_bytes(anchor, "checkpoint_hash32")?;
+    require_nonempty_bytes("anchor.checkpoint_hash32", checkpoint_hash)?;
+    out.extend(tlv(11, checkpoint_hash)?);
     let mut syms_payload = Vec::new();
     if let Some(symbols) = get_list(anchor, "symbols") {
         for symbol in symbols {
@@ -948,6 +965,30 @@ pub fn loads_anchor(data: &[u8], max_symbols: usize) -> AmberResult<TlvMap> {
             6 => {
                 anchor.insert("scheme".into(), TlvValue::String(decode_str(payload)?));
             }
+            7 => {
+                anchor.insert("archive_uuid".into(), TlvValue::Bytes(payload.to_vec()));
+            }
+            8 => {
+                anchor.insert(
+                    "total_symbol_count".into(),
+                    TlvValue::U64(varint_decode(payload, 0)?.0),
+                );
+            }
+            9 => {
+                anchor.insert(
+                    "data_symbol_count".into(),
+                    TlvValue::U64(varint_decode(payload, 0)?.0),
+                );
+            }
+            10 => {
+                anchor.insert(
+                    "parity_symbol_count".into(),
+                    TlvValue::U64(varint_decode(payload, 0)?.0),
+                );
+            }
+            11 => {
+                anchor.insert("checkpoint_hash32".into(), TlvValue::Bytes(payload.to_vec()));
+            }
             _ => {}
         }
     }
@@ -1067,6 +1108,11 @@ pub fn get_bytes<'a>(map: &'a TlvMap, key: &str) -> Option<&'a [u8]> {
         Some(TlvValue::Bytes(value)) => Some(value),
         _ => None,
     }
+}
+
+fn req_bytes<'a>(map: &'a TlvMap, key: &str) -> AmberResult<&'a [u8]> {
+    get_bytes(map, key)
+        .ok_or_else(|| AmberError::Invalid(format!("missing required bytes field: {key}")))
 }
 
 fn require_nonempty_bytes(field: &str, value: &[u8]) -> AmberResult<()> {

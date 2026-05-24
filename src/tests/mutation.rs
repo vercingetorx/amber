@@ -266,8 +266,8 @@
             .iter()
             .max_by_key(|group| get_u64(group, "group_id").unwrap_or(0))
             .unwrap();
-        let before_rows = get_map(latest, "amcf")
-            .and_then(|amcf| get_list(amcf, "parity"))
+        let before_rows = get_map(latest, "mds")
+            .and_then(|mds| get_list(mds, "parity"))
             .map(|rows| rows.len())
             .unwrap_or(0);
         assert_eq!(before_rows, 2);
@@ -282,8 +282,8 @@
             .iter()
             .max_by_key(|group| get_u64(group, "group_id").unwrap_or(0))
             .unwrap();
-        let after_rows = get_map(latest, "amcf")
-            .and_then(|amcf| get_list(amcf, "parity"))
+        let after_rows = get_map(latest, "mds")
+            .and_then(|mds| get_list(mds, "parity"))
             .map(|rows| rows.len())
             .unwrap_or(0);
         assert_eq!(after_rows, MIN_TOTAL_PARITY_ROWS_FLOOR);
@@ -292,7 +292,7 @@
     }
 
     #[test]
-    fn parity_archive_requires_explicit_amcf_scheme_for_rewrite() {
+    fn parity_archive_requires_explicit_mds_scheme_for_rewrite() {
         let mut reader = ArchiveReader::new("missing-scheme.amber");
         reader.symbols.push(SymbolInfo {
             symbol_index: 0,
@@ -305,22 +305,22 @@
             seed_base: Some([0u8; 16]),
         });
 
-        let mut amcf = TlvMap::new();
-        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0u8; 16]));
-        amcf.insert("parity".into(), TlvValue::List(Vec::new()));
+        let mut mds = TlvMap::new();
+        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0u8; 16]));
+        mds.insert("parity".into(), TlvValue::List(Vec::new()));
 
         let mut group = TlvMap::new();
         group.insert("group_id".into(), TlvValue::U64(0));
         group.insert("symbol_size".into(), TlvValue::U64(65_536));
         group.insert("symbols".into(), TlvValue::List(Vec::new()));
-        group.insert("amcf".into(), TlvValue::Map(amcf));
+        group.insert("mds".into(), TlvValue::Map(mds));
 
         let mut index = TlvMap::new();
         index.insert("ecc_groups".into(), TlvValue::List(vec![group]));
         reader.index = Some(index);
 
         let err = infer_global_parity_scheme(&reader).unwrap_err();
-        assert!(err.to_string().contains("AMCF metadata is missing its scheme"));
+        assert!(err.to_string().contains("MDS metadata is missing its scheme"));
     }
 
     #[test]

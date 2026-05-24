@@ -230,13 +230,13 @@
             },
             None,
         );
-        assert!(text.contains("Repair summary: 1 repaired (1 AMCF), 0 unrepaired"));
-        assert!(text.contains("AMCF repaired data symbols: [7]"));
-        assert!(text.contains("Rebuilt index metadata (26 AMCF parity symbol(s))"));
+        assert!(text.contains("Repair summary: 1 repaired (1 MDS), 0 unrepaired"));
+        assert!(text.contains("MDS repaired data symbols: [7]"));
+        assert!(text.contains("Rebuilt index metadata (26 MDS parity symbol(s))"));
     }
 
     #[test]
-    fn format_repair_report_failed_amcf_hint_does_not_suggest_hardening() {
+    fn format_repair_report_failed_mds_hint_does_not_suggest_hardening() {
         let text = format_repair_report(
             &ECCRepairResult {
                 repaired_data: Vec::new(),
@@ -256,7 +256,7 @@
             "Reason: surviving ECC was insufficient to recover the remaining corrupted symbols."
         ));
         assert!(text.contains("This archive is still damaged."));
-        assert!(!text.contains("append more AMCF parity"));
+        assert!(!text.contains("append more MDS parity"));
     }
 
     #[test]
@@ -768,7 +768,7 @@
 
         let mut reader = ArchiveReader::new(&seg2);
         reader.open().unwrap();
-        let before_rows = reader.amcf_parities.len();
+        let before_rows = reader.mds_parities.len();
         drop(reader);
 
         let rc = run(Args {
@@ -785,7 +785,7 @@
         let mut reader = ArchiveReader::new(&seg2);
         reader.open().unwrap();
         assert!(reader.verify().unwrap());
-        let after_rows = reader.amcf_parities.len();
+        let after_rows = reader.mds_parities.len();
         assert!(after_rows > before_rows);
 
         let _ = fs::remove_dir_all(tmp);

@@ -437,7 +437,7 @@
     fn rebuild_then_repair_tolerates_corrupted_parity_record() {
         let tmp = tempdir();
         let archive = build_chunk_repair_archive(&tmp);
-        crate::harden::append_amcf_parity(&archive, 200_000, None, None).unwrap();
+        crate::harden::append_mds_parity(&archive, 200_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -516,10 +516,10 @@
     }
 
     #[test]
-    fn missing_anchors_preserves_amcf_metadata_after_rebuild() {
+    fn missing_anchors_preserves_mds_metadata_after_rebuild() {
         let tmp = tempdir();
         let archive = build_sample_archive(&tmp, None);
-        crate::harden::append_amcf_parity(&archive, 200_000, None, None).unwrap();
+        crate::harden::append_mds_parity(&archive, 200_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -544,7 +544,7 @@
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
-        assert!(!reader.amcf_parities.is_empty());
+        assert!(!reader.mds_parities.is_empty());
 
         let _ = fs::remove_dir_all(tmp);
     }

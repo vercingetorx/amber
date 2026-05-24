@@ -2,18 +2,20 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::amcfadaptive::sample_amcf_combination;
 use crate::archiveio::{LogicalArchiveReader, canonical_archive_base_path};
 use crate::codec::Codec;
 use crate::constants::RTYPE_CHUNK;
 use crate::error::{AmberError, AmberResult};
-use crate::gf256::{gf_add_bytes, gf_inv, gf_mul, gf_mul_bytes};
+use crate::gf65536::{gf65536_add_bytes, gf65536_inv, gf65536_mul, gf65536_mul_bytes};
 use crate::hashutil::blake3_32;
+use crate::mds::sample_mds_combination;
 use crate::mutation::mutate_archive_via_work_copy;
 use crate::reader::{ArchiveReader, SymbolInfo};
 use crate::records::{parse_chunk_header_ext, read_record_at_bounded};
 use crate::recover::rebuild_index;
 use crate::tlv::{get_list, get_map, get_string, get_u64};
+
+type RepairEquation = (BTreeMap<usize, u16>, bytearray::ByteArray);
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ECCRepairResult {
@@ -188,7 +190,7 @@ fn repair_work_archive(
                 let rebuilt = rebuild_index(target, password, keyfile)?;
                 emit_progress(
                     progress,
-                    format!("repair: rebuilt index ({rebuilt} AMCF parity symbol(s)) before repair"),
+                    format!("repair: rebuilt index ({rebuilt} MDS parity symbol(s)) before repair"),
                 );
                 let reader = open_reader(target, password, keyfile)?;
                 let mut result = repair_archive_in_place(&reader, target, progress)?;
@@ -202,7 +204,7 @@ fn repair_work_archive(
             let rebuilt = rebuild_index(target, password, keyfile)?;
             emit_progress(
                 progress,
-                format!("repair: rebuilt index ({rebuilt} AMCF parity symbol(s)) and attempted repair"),
+                format!("repair: rebuilt index ({rebuilt} MDS parity symbol(s)) and attempted repair"),
             );
             let reader = open_reader(target, password, keyfile)?;
             let mut result = repair_archive_in_place(&reader, target, progress)?;
@@ -226,22 +228,22 @@ fn repair_archive_in_place(
         return Ok(result);
     }
     result.detected_data_chunks = count_damaged_data_chunks(reader, &corrupted);
-    if !reader.amcf_parities.is_empty() {
+    if !reader.mds_parities.is_empty() {
         emit_progress(
             progress,
             format!(
-                "repair: detected {} corrupted symbol(s), attempting AMCF",
+                "repair: detected {} corrupted symbol(s), attempting MDS",
                 corrupted.len()
             ),
         );
-        let repaired = repair_amcf(reader, &mut fh, &corrupted, progress)?;
+        let repaired = repair_mds(reader, &mut fh, &corrupted, progress)?;
         let repaired_set = repaired.iter().copied().collect::<BTreeSet<_>>();
         (result.repaired_data, result.repaired_parity) = classify_symbol_ids(reader, &repaired_set);
         for fixed in repaired {
             corrupted.remove(&fixed);
         }
         if count_damaged_data_chunks(reader, &corrupted) == 0 {
-            let repaired = repair_amcf_parity(reader, &mut fh, &corrupted, progress)?;
+            let repaired = repair_mds_parity(reader, &mut fh, &corrupted, progress)?;
             let repaired_set = repaired.iter().copied().collect::<BTreeSet<_>>();
             let (_data, mut repaired_parity) = classify_symbol_ids(reader, &repaired_set);
             result.repaired_parity.append(&mut repaired_parity);
@@ -255,7 +257,7 @@ fn repair_archive_in_place(
         emit_progress(
             progress,
             format!(
-                "repair: detected {} corrupted symbol(s), but archive has no AMCF parity",
+                "repair: detected {} corrupted symbol(s), but archive has no MDS parity",
                 corrupted.len()
             ),
         );
@@ -272,7 +274,7 @@ fn repair_archive_in_place(
     Ok(result)
 }
 
-fn repair_amcf_parity(
+fn repair_mds_parity(
     reader: &ArchiveReader,
     fh: &mut LogicalArchiveReader,
     corrupted: &BTreeSet<u64>,
@@ -289,7 +291,7 @@ fn repair_amcf_parity(
 
     let group_data_indices = build_group_data_indices(reader)?;
     let parity_by_symbol = reader
-        .amcf_parities
+        .mds_parities
         .iter()
         .map(|parity| (parity.symbol_index, parity))
         .collect::<BTreeMap<_, _>>();
@@ -299,15 +301,14 @@ fn repair_amcf_parity(
     for sym_index in parity_unknowns {
         let parity = parity_by_symbol.get(&sym_index).ok_or_else(|| {
             AmberError::Invalid(format!(
-                "AMCF parity symbol {sym_index} is missing parity metadata"
+                "MDS parity symbol {sym_index} is missing parity metadata"
             ))
         })?;
         let (data_indices, _scheme) =
             group_data_indices.get(&parity.seed_base).ok_or_else(|| {
                 AmberError::Invalid("Global parity references unknown seed_base".into())
             })?;
-        let combo = sample_amcf_combination(
-            &parity.seed_base,
+        let combo = sample_mds_combination(
             parity.seed_id as usize,
             data_indices,
             parity.row_count as usize,
@@ -322,15 +323,13 @@ fn repair_amcf_parity(
                 complete = false;
                 break;
             };
-            gf_add_bytes(
-                &mut parity_bytes,
-                &gf_mul_bytes(&data, coeff),
-            );
+            let product = gf65536_mul_bytes(&data, coeff, reader.symbol_size as usize);
+            gf65536_add_bytes(&mut parity_bytes, &product);
         }
         if !complete {
             emit_progress(
                 progress,
-                format!("repair: AMCF could not recompute parity symbol {sym_index}"),
+                format!("repair: MDS could not recompute parity symbol {sym_index}"),
             );
             continue;
         }
@@ -342,7 +341,7 @@ fn repair_amcf_parity(
     if !repaired.is_empty() {
         emit_progress(
             progress,
-            format!("repair: AMCF repaired {} parity symbol(s)", repaired.len()),
+            format!("repair: MDS repaired {} parity symbol(s)", repaired.len()),
         );
     }
     Ok(repaired)
@@ -390,7 +389,7 @@ fn expected_record_payload_len(reader: &ArchiveReader, record_offset: u64) -> Op
         .map(|chunk| chunk.payload_len)
 }
 
-fn repair_amcf(
+fn repair_mds(
     reader: &ArchiveReader,
     fh: &mut LogicalArchiveReader,
     corrupted: &BTreeSet<u64>,
@@ -411,10 +410,10 @@ fn repair_amcf(
         .collect::<BTreeMap<_, _>>();
 
     let group_data_indices = build_group_data_indices(reader)?;
-    let mut equations: Vec<(BTreeMap<usize, u8>, bytearray::ByteArray)> = Vec::new();
+    let mut equations: Vec<RepairEquation> = Vec::new();
     let mut symbol_cache: BTreeMap<u64, Option<Vec<u8>>> = BTreeMap::new();
 
-    for parity in &reader.amcf_parities {
+    for parity in &reader.mds_parities {
         if corrupted.contains(&parity.symbol_index) {
             continue;
         }
@@ -422,8 +421,7 @@ fn repair_amcf(
             group_data_indices.get(&parity.seed_base).ok_or_else(|| {
                 AmberError::Invalid("Global parity references unknown seed_base".into())
             })?;
-        let combo = sample_amcf_combination(
-            &parity.seed_base,
+        let combo = sample_mds_combination(
             parity.seed_id as usize,
             data_indices,
             parity.row_count as usize,
@@ -439,6 +437,14 @@ fn repair_amcf(
         let mut has_unknown = false;
         let mut skip_eq = false;
         for (sym_index, coeff) in combo {
+            if corrupted.contains(&(sym_index as u64)) {
+                if let Some(pos) = unknown_pos.get(&(sym_index as u64)) {
+                    let prev = coeffs.get(pos).copied().unwrap_or(0);
+                    coeffs.insert(*pos, prev ^ coeff);
+                    has_unknown = true;
+                }
+                continue;
+            }
             let data = match read_symbol_cached(reader, fh, sym_index as u64, &mut symbol_cache)? {
                 Some(bytes) => bytes,
                 None => {
@@ -446,15 +452,8 @@ fn repair_amcf(
                     break;
                 }
             };
-            if corrupted.contains(&(sym_index as u64)) {
-                if let Some(pos) = unknown_pos.get(&(sym_index as u64)) {
-                    let prev = coeffs.get(pos).copied().unwrap_or(0);
-                    coeffs.insert(*pos, prev ^ coeff);
-                    has_unknown = true;
-                }
-            } else {
-                gf_add_bytes(rhs.as_mut_slice(), &gf_mul_bytes(&data, coeff));
-            }
+            let product = gf65536_mul_bytes(&data, coeff, rhs.as_slice().len());
+            gf65536_add_bytes(rhs.as_mut_slice(), &product);
         }
         if skip_eq || !has_unknown {
             continue;
@@ -462,13 +461,42 @@ fn repair_amcf(
         equations.push((coeffs, rhs));
     }
     if equations.is_empty() {
-        emit_progress(progress, "repair: AMCF had no usable equations".to_owned());
+        emit_progress(progress, "repair: MDS had no usable equations".to_owned());
         return Ok(Vec::new());
     }
     emit_progress(
         progress,
-        format!("repair: AMCF solving {} equations", equations.len()),
+        format!("repair: MDS solving {} equations", equations.len()),
     );
+    let original_equations = equations.clone();
+
+    if unknowns.len() == 1 {
+        let sym_index = unknowns[0];
+        let mut repaired = Vec::new();
+        for (coeffs, rhs) in &equations {
+            let coeff = coeffs.get(&0).copied().unwrap_or(0);
+            if coeff == 0 {
+                continue;
+            }
+            let candidate =
+                gf65536_mul_bytes(rhs.as_slice(), gf65536_inv(coeff), rhs.as_slice().len());
+            if write_repaired_data_solution(
+                reader,
+                fh,
+                &[(sym_index, candidate)],
+                &mut repaired,
+                progress,
+            )? {
+                repaired.sort_unstable();
+                repaired.dedup();
+                emit_progress(
+                    progress,
+                    format!("repair: MDS repaired {} symbol(s)", repaired.len()),
+                );
+                return Ok(repaired);
+            }
+        }
+    }
 
     let mut solutions: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
     let mut var_to_eqs: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -498,8 +526,8 @@ fn repair_amcf(
         if solutions.contains_key(&pos) {
             continue;
         }
-        let inv = gf_inv(coeff);
-        let value = gf_mul_bytes(rhs.as_slice(), inv);
+        let inv = gf65536_inv(coeff);
+        let value = gf65536_mul_bytes(rhs.as_slice(), inv, rhs.as_slice().len());
         solutions.insert(pos, value.clone());
         if let Some(impacted) = var_to_eqs.get(&pos).cloned() {
             for ej in impacted {
@@ -510,7 +538,8 @@ fn repair_amcf(
                 if let Some(cc) = cdict.get(&pos).copied()
                     && cc != 0
                 {
-                    gf_add_bytes(rr.as_mut_slice(), &gf_mul_bytes(&value, cc));
+                    let product = gf65536_mul_bytes(&value, cc, rr.as_slice().len());
+                    gf65536_add_bytes(rr.as_mut_slice(), &product);
                     cdict.insert(pos, 0);
                     if cdict.values().filter(|&&c| c != 0).count() == 1 {
                         q.push_back(ej);
@@ -530,18 +559,30 @@ fn repair_amcf(
     if solutions.len() == unknowns.len() {
         emit_progress(
             progress,
-            format!("repair: AMCF solved all unknowns ({})", unknowns.len()),
+            format!("repair: MDS solved all unknowns ({})", unknowns.len()),
         );
-        for (pos, data_bytes) in solutions {
-            let sym_index = unknowns[pos];
-            write_repaired_symbol(reader, fh, sym_index, &data_bytes, &mut repaired, progress)?;
+        let candidates = solutions
+            .into_iter()
+            .map(|(pos, data_bytes)| (unknowns[pos], data_bytes))
+            .collect::<Vec<_>>();
+        if !write_repaired_data_solution(reader, fh, &candidates, &mut repaired, progress)? {
+            for candidates in mds_candidate_solutions(
+                &original_equations,
+                &unknowns,
+                &BTreeMap::new(),
+                corrupted,
+            ) {
+                if write_repaired_data_solution(reader, fh, &candidates, &mut repaired, progress)? {
+                    break;
+                }
+            }
         }
         repaired.sort_unstable();
         repaired.dedup();
         if !repaired.is_empty() {
             emit_progress(
                 progress,
-                format!("repair: AMCF repaired {} symbol(s)", repaired.len()),
+                format!("repair: MDS repaired {} symbol(s)", repaired.len()),
             );
         }
         return Ok(repaired);
@@ -561,10 +602,77 @@ fn repair_amcf(
     emit_progress(
         progress,
         format!(
-            "repair: AMCF running elimination on {} residual vars",
+            "repair: MDS running validated elimination on {} residual vars",
             residual_vars.len()
         ),
     );
+
+    for candidates in mds_candidate_solutions(&original_equations, &unknowns, &solutions, corrupted) {
+        if write_repaired_data_solution(reader, fh, &candidates, &mut repaired, progress)? {
+            break;
+        }
+    }
+    repaired.sort_unstable();
+    repaired.dedup();
+    if !repaired.is_empty() {
+        emit_progress(
+            progress,
+            format!("repair: MDS repaired {} symbol(s)", repaired.len()),
+        );
+    }
+    Ok(repaired)
+}
+
+fn mds_candidate_solutions(
+    equations: &[RepairEquation],
+    unknowns: &[u64],
+    known_solutions: &BTreeMap<usize, Vec<u8>>,
+    corrupted: &BTreeSet<u64>,
+) -> Vec<Vec<(u64, Vec<u8>)>> {
+    let mut candidates = Vec::new();
+    let omitted = BTreeSet::new();
+    if let Some(solution) = solve_mds_equation_subset(equations, unknowns.len(), known_solutions, &omitted)
+    {
+        candidates.push(solution_to_candidates(solution, unknowns, corrupted));
+    }
+
+    for omit in 0..equations.len() {
+        let omitted = BTreeSet::from([omit]);
+        if let Some(solution) =
+            solve_mds_equation_subset(equations, unknowns.len(), known_solutions, &omitted)
+        {
+            candidates.push(solution_to_candidates(solution, unknowns, corrupted));
+        }
+    }
+    candidates
+}
+
+fn solution_to_candidates(
+    solutions: BTreeMap<usize, Vec<u8>>,
+    unknowns: &[u64],
+    corrupted: &BTreeSet<u64>,
+) -> Vec<(u64, Vec<u8>)> {
+    solutions
+        .into_iter()
+        .filter_map(|(pos, data_bytes)| {
+            let sym_index = unknowns[pos];
+            corrupted.contains(&sym_index).then_some((sym_index, data_bytes))
+        })
+        .collect()
+}
+
+fn solve_mds_equation_subset(
+    equations: &[RepairEquation],
+    unknown_count: usize,
+    known_solutions: &BTreeMap<usize, Vec<u8>>,
+    omitted_equations: &BTreeSet<usize>,
+) -> Option<BTreeMap<usize, Vec<u8>>> {
+    let residual_vars = (0..unknown_count)
+        .filter(|pos| !known_solutions.contains_key(pos))
+        .collect::<Vec<_>>();
+    if residual_vars.is_empty() {
+        return Some(known_solutions.clone());
+    }
 
     let var_index = residual_vars
         .iter()
@@ -573,10 +681,14 @@ fn repair_amcf(
         .collect::<BTreeMap<_, _>>();
     let mut a = Vec::new();
     let mut b = Vec::new();
-    for (coeffs, mut rhs) in equations {
-        let mut row = vec![0u8; residual_vars.len()];
+    for (eq_index, (coeffs, rhs)) in equations.iter().enumerate() {
+        if omitted_equations.contains(&eq_index) {
+            continue;
+        }
+        let mut rhs = rhs.clone();
+        let mut row = vec![0u16; residual_vars.len()];
         let mut nz = 0usize;
-        for (pos, coeff) in &coeffs {
+        for (pos, coeff) in coeffs {
             if *coeff != 0
                 && let Some(index) = var_index.get(pos)
             {
@@ -587,22 +699,37 @@ fn repair_amcf(
         if nz == 0 {
             continue;
         }
-        if !solutions.is_empty() {
-            for (spos, sval) in &solutions {
-                if let Some(cc) = coeffs.get(spos).copied()
-                    && cc != 0
-                {
-                    gf_add_bytes(rhs.as_mut_slice(), &gf_mul_bytes(sval, cc));
-                }
+        for (spos, sval) in known_solutions {
+            if let Some(cc) = coeffs.get(spos).copied()
+                && cc != 0
+            {
+                let product = gf65536_mul_bytes(sval, cc, rhs.as_slice().len());
+                gf65536_add_bytes(rhs.as_mut_slice(), &product);
             }
         }
         a.push(row);
         b.push(rhs);
     }
-    let mut pivots = vec![None; residual_vars.len()];
-    let mut r = 0usize;
+    solve_dense_system(a, b).map(|residual_solution| {
+        let mut solutions = known_solutions.clone();
+        for (i, value) in residual_solution.into_iter().enumerate() {
+            solutions.insert(residual_vars[i], value);
+        }
+        solutions
+    })
+}
+
+fn solve_dense_system(
+    mut a: Vec<Vec<u16>>,
+    mut b: Vec<bytearray::ByteArray>,
+) -> Option<Vec<Vec<u8>>> {
+    if a.is_empty() {
+        return None;
+    }
     let m = a.len();
-    let nvars = residual_vars.len();
+    let nvars = a[0].len();
+    let mut pivots = vec![None; nvars];
+    let mut r = 0usize;
     for c in 0..nvars {
         let mut pivot = None;
         for (i, row) in a.iter().enumerate().skip(r).take(m.saturating_sub(r)) {
@@ -616,13 +743,17 @@ fn repair_amcf(
             a.swap(r, pivot);
             b.swap(r, pivot);
         }
-        let inv = gf_inv(a[r][c]);
+        let inv = gf65536_inv(a[r][c]);
         for j in c..nvars {
             if a[r][j] != 0 {
-                a[r][j] = gf_mul(a[r][j], inv);
+                a[r][j] = gf65536_mul(a[r][j], inv);
             }
         }
-        b[r] = bytearray::ByteArray::from(gf_mul_bytes(b[r].as_slice(), inv));
+        b[r] = bytearray::ByteArray::from(gf65536_mul_bytes(
+            b[r].as_slice(),
+            inv,
+            b[r].as_slice().len(),
+        ));
         for i in 0..m {
             if i == r {
                 continue;
@@ -631,11 +762,12 @@ fn repair_amcf(
             if factor != 0 {
                 for j in c..nvars {
                     if a[r][j] != 0 {
-                        a[i][j] ^= gf_mul(a[r][j], factor);
+                        a[i][j] ^= gf65536_mul(a[r][j], factor);
                     }
                 }
-                let rhs_contrib = gf_mul_bytes(b[r].as_slice(), factor);
-                gf_add_bytes(b[i].as_mut_slice(), &rhs_contrib);
+                let rhs_contrib =
+                    gf65536_mul_bytes(b[r].as_slice(), factor, b[r].as_slice().len());
+                gf65536_add_bytes(b[i].as_mut_slice(), &rhs_contrib);
             }
         }
         pivots[c] = Some(r);
@@ -644,40 +776,75 @@ fn repair_amcf(
             break;
         }
     }
-    let mut x: Vec<Option<Vec<u8>>> = vec![None; nvars];
-    for c in (0..nvars).rev() {
-        let Some(pr) = pivots[c] else { continue };
-        let mut rhs = b[pr].clone();
-        for k in c + 1..nvars {
-            if let Some(sol) = &x[k] {
-                let coeff = a[pr][k];
-                if coeff != 0 {
-                    gf_add_bytes(rhs.as_mut_slice(), &gf_mul_bytes(sol, coeff));
-                }
-            }
+    if pivots.iter().any(Option::is_none) {
+        return None;
+    }
+    let mut x = vec![Vec::new(); nvars];
+    for (c, pr) in pivots.into_iter().enumerate() {
+        x[c] = b[pr?].clone().into_vec();
+    }
+    Some(x)
+}
+
+fn write_repaired_data_solution(
+    reader: &ArchiveReader,
+    fh: &mut LogicalArchiveReader,
+    candidates: &[(u64, Vec<u8>)],
+    repaired: &mut Vec<u64>,
+    progress: &mut Option<&mut dyn FnMut(String)>,
+) -> AmberResult<bool> {
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+    let mut originals = Vec::with_capacity(candidates.len());
+    let mut impacted_chunks = BTreeSet::new();
+    for (sym_index, data_bytes) in candidates {
+        let symbol = &reader.symbols[*sym_index as usize];
+        if symbol.is_parity {
+            return Err(AmberError::Invalid(
+                "data repair solution contained a parity symbol".into(),
+            ));
         }
-        x[c] = Some(rhs.into_vec());
-    }
-    for (c, sol) in x.into_iter().enumerate() {
-        if let Some(sol) = sol {
-            solutions.insert(residual_vars[c], sol);
+        if data_bytes.len() < symbol.length as usize {
+            return Err(AmberError::Invalid(
+                "MDS repair candidate is shorter than symbol length".into(),
+            ));
         }
-    }
-    for (pos, data_bytes) in solutions {
-        let sym_index = unknowns[pos];
-        if corrupted.contains(&sym_index) {
-            write_repaired_symbol(reader, fh, sym_index, &data_bytes, &mut repaired, progress)?;
+        fh.seek(SeekFrom::Start(symbol.offset))?;
+        let mut original = vec![0u8; symbol.length as usize];
+        let read = fh.read(&mut original)?;
+        if read != original.len() {
+            return Ok(false);
         }
+        originals.push((*sym_index, original));
+        impacted_chunks.insert(symbol.record_offset);
     }
-    repaired.sort_unstable();
-    repaired.dedup();
-    if !repaired.is_empty() {
-        emit_progress(
-            progress,
-            format!("repair: AMCF repaired {} symbol(s)", repaired.len()),
-        );
+
+    for (sym_index, data_bytes) in candidates {
+        let symbol = &reader.symbols[*sym_index as usize];
+        fh.seek(SeekFrom::Start(symbol.offset))?;
+        fh.write_all(&data_bytes[..symbol.length as usize])?;
     }
-    Ok(repaired)
+    fh.flush()?;
+
+    let valid = impacted_chunks
+        .iter()
+        .all(|record_offset| verify_chunk_integrity(reader, fh, *record_offset));
+    if !valid {
+        for (sym_index, original) in originals {
+            let symbol = &reader.symbols[sym_index as usize];
+            fh.seek(SeekFrom::Start(symbol.offset))?;
+            fh.write_all(&original)?;
+        }
+        fh.flush()?;
+        return Ok(false);
+    }
+
+    for (sym_index, _data_bytes) in candidates {
+        repaired.push(*sym_index);
+        emit_progress(progress, format!("repair: MDS repaired symbol {sym_index}"));
+    }
+    Ok(true)
 }
 
 fn write_repaired_symbol(
@@ -687,17 +854,17 @@ fn write_repaired_symbol(
     data_bytes: &[u8],
     repaired: &mut Vec<u64>,
     progress: &mut Option<&mut dyn FnMut(String)>,
-) -> AmberResult<()> {
+) -> AmberResult<bool> {
     let symbol = &reader.symbols[sym_index as usize];
     let actual = &data_bytes[..symbol.length as usize];
     if symbol.tag32 != [0u8; 32] && blake3_32(actual) != symbol.tag32 {
-        return Ok(());
+        return Ok(false);
     }
     fh.seek(SeekFrom::Start(symbol.offset))?;
     fh.write_all(actual)?;
     repaired.push(sym_index);
-    emit_progress(progress, format!("repair: AMCF repaired symbol {sym_index}"));
-    Ok(())
+    emit_progress(progress, format!("repair: MDS repaired symbol {sym_index}"));
+    Ok(true)
 }
 
 fn emit_progress(progress: &mut Option<&mut dyn FnMut(String)>, msg: String) {
@@ -746,11 +913,11 @@ fn build_group_data_indices(
         return Ok(group_data_indices);
     };
     for group in groups {
-        let Some(amcf) = get_map(group, "amcf") else {
+        let Some(mds) = get_map(group, "mds") else {
             continue;
         };
-        let seed_base = reader.amcf_parities.first().map(|_| [0u8; 16]);
-        let stored_scheme = get_string(amcf, "scheme").ok_or_else(|| {
+        let seed_base = reader.mds_parities.first().map(|_| [0u8; 16]);
+        let stored_scheme = get_string(mds, "scheme").ok_or_else(|| {
             AmberError::Invalid("Global parity metadata is missing its scheme".into())
         })?;
         let scheme = stored_scheme.to_owned();
@@ -762,7 +929,7 @@ fn build_group_data_indices(
             .filter_map(|sym| get_u64(&sym, "symbol_index").map(|v| v as usize))
             .collect::<Vec<_>>();
         data_indices.sort_unstable();
-        if let Some(seed_base_bytes) = crate::tlv::get_bytes(amcf, "seed_base") {
+        if let Some(seed_base_bytes) = crate::tlv::get_bytes(mds, "seed_base") {
             if seed_base_bytes.len() != 16 {
                 return Err(AmberError::Invalid(
                     "Global parity seed_base must be 16 bytes".into(),
@@ -774,7 +941,7 @@ fn build_group_data_indices(
         } else if let Some(seed) = seed_base {
             group_data_indices.insert(seed, (data_indices.clone(), scheme.clone()));
         }
-        if let Some(parity_rows) = get_list(amcf, "parity") {
+        if let Some(parity_rows) = get_list(mds, "parity") {
             for item in parity_rows {
                 if let Some(seed_base_bytes) = crate::tlv::get_bytes(item, "seed_base") {
                     if seed_base_bytes.len() != 16 {
@@ -807,7 +974,7 @@ fn open_reader(
 }
 
 fn has_inconsistent_ecc_metadata(reader: &ArchiveReader) -> bool {
-    reader.symbols.iter().any(|sym| sym.is_parity) && reader.amcf_parities.is_empty()
+    reader.symbols.iter().any(|sym| sym.is_parity) && reader.mds_parities.is_empty()
 }
 
 fn read_symbol_cached(

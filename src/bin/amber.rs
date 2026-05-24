@@ -10,7 +10,7 @@ use amber::cli::{
     seal_archive_with_progress, salvage_archive_with_progress, unseal_archive_with_progress,
     verify_archive,
 };
-use amber::harden::append_amcf_parity;
+use amber::harden::append_mds_parity;
 use clap::{Parser, Subcommand};
 use std::time::Instant;
 
@@ -179,7 +179,7 @@ fn format_repair_report(
         lines.push(format!("Repaired copy written to: {}", path.display()));
     }
     lines.push(format!(
-        "Repair summary: {} repaired ({} AMCF), {} unrepaired",
+        "Repair summary: {} repaired ({} MDS), {} unrepaired",
         result.repaired_data.len() + result.repaired_parity.len(),
         result.repaired_data.len() + result.repaired_parity.len(),
         result.remaining_data.len() + result.remaining_parity.len()
@@ -191,11 +191,11 @@ fn format_repair_report(
         ));
     }
     if !result.repaired_data.is_empty() {
-        lines.push(format!("AMCF repaired data symbols: {:?}", result.repaired_data));
+        lines.push(format!("MDS repaired data symbols: {:?}", result.repaired_data));
     }
     if !result.repaired_parity.is_empty() {
         lines.push(format!(
-            "AMCF repaired parity symbols: {:?}",
+            "MDS repaired parity symbols: {:?}",
             result.repaired_parity
         ));
     }
@@ -233,7 +233,7 @@ fn format_repair_report(
             lines.push("Rebuilt index metadata".into());
         } else {
             lines.push(format!(
-                "Rebuilt index metadata ({count} AMCF parity symbol(s))"
+                "Rebuilt index metadata ({count} MDS parity symbol(s))"
             ));
         }
     }
@@ -316,7 +316,7 @@ fn run(args: Args) -> Result<i32, AmberError> {
                             }
                         }
                         SealProgress::Finalizing => {
-                            println!(" Finalizing (AMCF global parity, anchors, index)...");
+                            println!(" Finalizing (MDS global parity, anchors, index)...");
                         }
                     }
                 },
@@ -326,7 +326,7 @@ fn run(args: Args) -> Result<i32, AmberError> {
             let mbps = mib / dt;
             let total_pct = (100.0 / 12.0) + 17.0;
             println!(
-                "Done: {} files, {} dirs, {} links; {:.2} MiB in {:.1}s; {:.2} MiB/s; ECC=archival (~{:.2}% total parity, AMCF-ECC); compression={}",
+                "Done: {} files, {} dirs, {} links; {:.2} MiB in {:.1}s; {:.2} MiB/s; ECC=archival (~{:.2}% total parity, MDS-ECC); compression={}",
                 summary.file_count,
                 summary.dir_count,
                 summary.symlink_count,
@@ -571,7 +571,7 @@ fn run(args: Args) -> Result<i32, AmberError> {
             }
             if summary.payload_ok && !summary.parity_ok {
                 eprintln!(
-                    "Warning: payload verified, but repair redundancy is damaged ({} AMCF parity symbol(s)); run 'amber repair --safe' to restore parity.",
+                    "Warning: payload verified, but repair redundancy is damaged ({} MDS parity symbol(s)); run 'amber repair --safe' to restore parity.",
                     summary.damaged_parity_symbols
                 );
             }
@@ -613,17 +613,17 @@ fn run(args: Args) -> Result<i32, AmberError> {
             println!("Hardening {}", archive.display());
             assert_archive_clean_for_harden(&archive, password.as_deref(), keyfile.as_deref())?;
             println!(
-                " Rewriting archive with ~{:.2}% additional AMCF parity...",
+                " Rewriting archive with ~{:.2}% additional MDS parity...",
                 extra_parity_ppm as f64 / 10000.0
             );
             let added =
-                append_amcf_parity(
+                append_mds_parity(
                     &archive,
                     extra_parity_ppm,
                     password.as_deref(),
                     keyfile.as_deref(),
                 )?;
-            println!("Added {added} AMCF parity symbol(s)");
+            println!("Added {added} MDS parity symbol(s)");
             Ok(0)
         }
         Command::Repair {

@@ -2,7 +2,7 @@
     use std::io::{Seek, SeekFrom, Write};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::append_amcf_parity;
+    use super::append_mds_parity;
     use crate::archiveio::LogicalArchiveReader;
     use crate::constants::CODEC_DEFLATE;
     use crate::ecc::repair_archive;
@@ -56,7 +56,7 @@
     }
 
     #[test]
-    fn append_amcf_parity_rewrites_archive_with_more_parity() {
+    fn append_mds_parity_rewrites_archive_with_more_parity() {
         let tmp = tempdir();
         let input = tmp.join("payload.bin");
         let archive = tmp.join("harden.amber");
@@ -84,18 +84,18 @@
 
         let mut before = ArchiveReader::new(&archive);
         before.open().unwrap();
-        let before_parity = before.amcf_parities.len();
+        let before_parity = before.mds_parities.len();
         assert!(before.verify().unwrap());
         drop(before);
 
-        let added = append_amcf_parity(&archive, 30_000, None, None).unwrap();
+        let added = append_mds_parity(&archive, 30_000, None, None).unwrap();
         assert!(added > 0);
 
         let mut after = ArchiveReader::new(&archive);
         after.open().unwrap();
         assert!(after.verify().unwrap());
         assert_eq!(after.entries.iter().filter(|e| e.kind == 0).count(), 1);
-        assert!(after.amcf_parities.len() > before_parity);
+        assert!(after.mds_parities.len() > before_parity);
 
         let _ = fs::remove_dir_all(tmp);
     }
@@ -152,8 +152,8 @@
         writer.finalize().unwrap();
         writer.close();
 
-        let first_added = append_amcf_parity(&archive, 150_000, None, None).unwrap();
-        let second_added = append_amcf_parity(&archive, 200_000, None, None).unwrap();
+        let first_added = append_mds_parity(&archive, 150_000, None, None).unwrap();
+        let second_added = append_mds_parity(&archive, 200_000, None, None).unwrap();
         assert!(first_added > 0);
         assert!(second_added > 0);
 
@@ -164,8 +164,8 @@
             .iter()
             .max_by_key(|group| get_u64(group, "group_id").unwrap_or(0))
             .unwrap();
-        let row_counts = get_map(latest, "amcf")
-            .and_then(|amcf| get_list(amcf, "parity"))
+        let row_counts = get_map(latest, "mds")
+            .and_then(|mds| get_list(mds, "parity"))
             .unwrap()
             .iter()
             .filter_map(|item| get_u64(item, "row_count"))
@@ -249,14 +249,14 @@
             .iter()
             .max_by_key(|group| get_u64(group, "group_id").unwrap_or(0))
             .unwrap();
-        let before_rows = get_map(latest, "amcf")
-            .and_then(|amcf| get_list(amcf, "parity"))
+        let before_rows = get_map(latest, "mds")
+            .and_then(|mds| get_list(mds, "parity"))
             .map(|rows| rows.len())
             .unwrap_or(0);
         assert_eq!(before_rows, 2);
         drop(reader);
 
-        let added = append_amcf_parity(&archive, 0, None, None).unwrap();
+        let added = append_mds_parity(&archive, 0, None, None).unwrap();
         assert_eq!(added, MIN_TOTAL_PARITY_ROWS_FLOOR - 2);
 
         let mut reader = ArchiveReader::new(&archive);
@@ -266,8 +266,8 @@
             .iter()
             .max_by_key(|group| get_u64(group, "group_id").unwrap_or(0))
             .unwrap();
-        let after_rows = get_map(latest, "amcf")
-            .and_then(|amcf| get_list(amcf, "parity"))
+        let after_rows = get_map(latest, "mds")
+            .and_then(|mds| get_list(mds, "parity"))
             .map(|rows| rows.len())
             .unwrap_or(0);
         assert_eq!(after_rows, MIN_TOTAL_PARITY_ROWS_FLOOR);
@@ -306,7 +306,7 @@
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
         let baseline_entries = entry_signature_map(&reader);
-        let baseline_rows = reader.amcf_parities.len();
+        let baseline_rows = reader.mds_parities.len();
         assert!(reader.verify().unwrap());
         drop(reader);
         let before = fs::read(&archive).unwrap();
@@ -314,7 +314,7 @@
         let original_mode = fs::metadata(&tmp).unwrap().permissions().mode();
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o555)).unwrap();
 
-        let err = append_amcf_parity(&archive, 150_000, None, None).unwrap_err();
+        let err = append_mds_parity(&archive, 150_000, None, None).unwrap_err();
 
         fs::set_permissions(&tmp, fs::Permissions::from_mode(original_mode)).unwrap();
 
@@ -330,7 +330,7 @@
         reader.open().unwrap();
         assert!(reader.verify().unwrap());
         assert_eq!(entry_signature_map(&reader), baseline_entries);
-        assert_eq!(reader.amcf_parities.len(), baseline_rows);
+        assert_eq!(reader.mds_parities.len(), baseline_rows);
 
         let _ = fs::remove_dir_all(tmp);
     }

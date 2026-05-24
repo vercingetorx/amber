@@ -26,7 +26,7 @@ Primary emphasis:
 
 Primary objective:
 
-- maximize the probability of recovering original archive contents after realistic long-term storage damage
+- recover original archive contents exactly whenever the verified erasure set is within the archive's committed MDS repair budget
 
 Secondary objective:
 
@@ -63,6 +63,7 @@ Recovery should preserve higher layers before claiming lower-layer success.
 - metadata reconstruction matters as much as raw ECC repair
 - random and localized loss both matter
 - parity loss alongside data loss is part of the expected model
+- parity loss reduces available MDS equations and therefore reduces remaining data-repair budget
 - hardening must be possible later as medium health assumptions change
 
 ## Practical note on compression

@@ -8,12 +8,13 @@ use crate::crc32c::crc32c;
 use crate::encryption::EncryptionContext;
 use crate::error::{AmberError, AmberResult};
 use crate::hashutil::blake3_32;
-use crate::tlv::{TlvMap, TlvValue, dumps_anchor};
+use crate::tlv::{TlvMap, TlvValue, dumps_anchor, get_bytes, get_string, get_u64};
 
 pub const INDEX_FRAME_HEADER_SIZE: usize = 84;
 pub const INDEX_LOCATOR_SIZE: usize = 48;
 
 pub fn build_anchor_payload(
+    archive_uuid: [u8; 16],
     symbols: &[TlvMap],
     symbol_size: u64,
     merkle_root: [u8; 32],
@@ -25,14 +26,122 @@ pub fn build_anchor_payload(
     payload.insert("version".into(), TlvValue::U64(1));
     payload.insert("symbol_size".into(), TlvValue::U64(symbol_size));
     payload.insert("merkle_root".into(), TlvValue::Bytes(merkle_root.to_vec()));
+    payload.insert(
+        "archive_uuid".into(),
+        TlvValue::Bytes(archive_uuid.to_vec()),
+    );
     if let Some(seed_base) = seed_base {
         payload.insert("seed_base".into(), TlvValue::Bytes(seed_base.to_vec()));
     }
     if let Some(scheme) = scheme {
         payload.insert("scheme".into(), TlvValue::String(scheme.to_owned()));
     }
+    let data_symbol_count = symbols
+        .iter()
+        .filter(|symbol| !crate::tlv::get_bool(symbol, "is_parity").unwrap_or(false))
+        .count() as u64;
+    let parity_symbol_count = symbols.len() as u64 - data_symbol_count;
+    payload.insert(
+        "total_symbol_count".into(),
+        TlvValue::U64(symbols.len() as u64),
+    );
+    payload.insert("data_symbol_count".into(), TlvValue::U64(data_symbol_count));
+    payload.insert(
+        "parity_symbol_count".into(),
+        TlvValue::U64(parity_symbol_count),
+    );
+    let checkpoint_hash = metadata_checkpoint_hash(
+        archive_uuid,
+        symbol_size,
+        merkle_root,
+        seed_base.unwrap_or(&[]),
+        scheme.unwrap_or(""),
+        symbols.len() as u64,
+        data_symbol_count,
+        parity_symbol_count,
+    );
+    payload.insert(
+        "checkpoint_hash32".into(),
+        TlvValue::Bytes(checkpoint_hash.to_vec()),
+    );
     payload.insert("symbols".into(), TlvValue::List(symbols[start..].to_vec()));
     payload
+}
+
+pub fn metadata_checkpoint_hash(
+    archive_uuid: [u8; 16],
+    symbol_size: u64,
+    merkle_root: [u8; 32],
+    seed_base: &[u8],
+    scheme: &str,
+    total_symbol_count: u64,
+    data_symbol_count: u64,
+    parity_symbol_count: u64,
+) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"amber-metadata-checkpoint-v1");
+    bytes.extend_from_slice(&archive_uuid);
+    bytes.extend_from_slice(&symbol_size.to_le_bytes());
+    bytes.extend_from_slice(&merkle_root);
+    bytes.extend_from_slice(&(seed_base.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(seed_base);
+    bytes.extend_from_slice(&(scheme.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(scheme.as_bytes());
+    bytes.extend_from_slice(&total_symbol_count.to_le_bytes());
+    bytes.extend_from_slice(&data_symbol_count.to_le_bytes());
+    bytes.extend_from_slice(&parity_symbol_count.to_le_bytes());
+    blake3_32(&bytes)
+}
+
+pub fn metadata_checkpoint_valid(anchor: &TlvMap, archive_uuid: [u8; 16]) -> bool {
+    let Some(stored_hash) = get_bytes(anchor, "checkpoint_hash32") else {
+        return false;
+    };
+    if stored_hash.len() != 32 {
+        return false;
+    }
+    let Some(stored_uuid) = get_bytes(anchor, "archive_uuid") else {
+        return false;
+    };
+    if stored_uuid != archive_uuid {
+        return false;
+    }
+    let Some(symbol_size) = get_u64(anchor, "symbol_size") else {
+        return false;
+    };
+    let Some(merkle_root) = get_bytes(anchor, "merkle_root") else {
+        return false;
+    };
+    if merkle_root.len() != 32 {
+        return false;
+    }
+    let Some(total_symbol_count) = get_u64(anchor, "total_symbol_count") else {
+        return false;
+    };
+    let Some(data_symbol_count) = get_u64(anchor, "data_symbol_count") else {
+        return false;
+    };
+    let Some(parity_symbol_count) = get_u64(anchor, "parity_symbol_count") else {
+        return false;
+    };
+    if data_symbol_count + parity_symbol_count != total_symbol_count {
+        return false;
+    }
+    let mut uuid = [0u8; 16];
+    uuid.copy_from_slice(stored_uuid);
+    let mut root = [0u8; 32];
+    root.copy_from_slice(merkle_root);
+    let expected = metadata_checkpoint_hash(
+        uuid,
+        symbol_size,
+        root,
+        get_bytes(anchor, "seed_base").unwrap_or(&[]),
+        get_string(anchor, "scheme").unwrap_or(""),
+        total_symbol_count,
+        data_symbol_count,
+        parity_symbol_count,
+    );
+    stored_hash == expected
 }
 
 pub fn write_anchor_record<W: crate::records::RecordWriteTarget>(

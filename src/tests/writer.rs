@@ -4,13 +4,13 @@
 
     use filetime::{FileTime, set_file_times};
 
-    use super::{ArchiveWriter, CANONICAL_WRITER_INFO};
+    use super::{ArchiveWriter, CANONICAL_WRITER_INFO, DEFAULT_SYMBOL_SIZE, recommended_mds_symbol_size};
     use crate::archiveio::LogicalArchiveReader;
     use crate::constants::{CODEC_ZSTD, RTYPE_ENTRY_BEGIN};
     use crate::records::read_record_at_bounded;
     use crate::reader::ArchiveReader;
     use crate::superblock::SUPERBLOCK_SIZE;
-    use crate::tlv::{get_list, get_map, get_u64, iter_tlvs};
+    use crate::tlv::{get_bytes, get_list, get_map, get_u64, iter_tlvs};
 
     fn tempdir() -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
@@ -24,6 +24,16 @@
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn writer_symbol_size_scales_to_fit_gf65536_mds_tag_space() {
+        let small = recommended_mds_symbol_size(1024 * 1024, None, None).unwrap();
+        assert_eq!(small, DEFAULT_SYMBOL_SIZE);
+
+        let large = recommended_mds_symbol_size(16 * 1024 * 1024 * 1024, None, None).unwrap();
+        assert!(large > DEFAULT_SYMBOL_SIZE);
+        assert_eq!(large % 2, 0);
     }
 
     #[test]
@@ -62,6 +72,28 @@
         assert_eq!(fs::read(&extracted).unwrap(), b"hello from writer");
         assert!(!reader.symbols.is_empty());
         assert!(!reader.anchors_data.is_empty());
+        let final_anchor = reader.anchors_data.last().unwrap();
+        assert_eq!(
+            get_u64(final_anchor, "total_symbol_count"),
+            Some(reader.symbols.len() as u64)
+        );
+        assert_eq!(
+            get_u64(final_anchor, "data_symbol_count"),
+            Some(reader.symbols.iter().filter(|symbol| !symbol.is_parity).count() as u64)
+        );
+        assert_eq!(
+            get_u64(final_anchor, "parity_symbol_count"),
+            Some(reader.symbols.iter().filter(|symbol| symbol.is_parity).count() as u64)
+        );
+        assert_eq!(
+            get_bytes(final_anchor, "archive_uuid"),
+            Some(reader.superblock.as_ref().unwrap().uuid.as_slice())
+        );
+        assert_eq!(
+            get_bytes(final_anchor, "checkpoint_hash32")
+                .map(|value| value.len()),
+            Some(32)
+        );
 
         let _ = fs::remove_dir_all(tmp);
     }

@@ -1,20 +1,18 @@
 # Amber ECC
 
-Amber’s production ECC regime is `AMCF-ECC`:
-
-- Adaptive Multi-Scale Continuous-Field ECC
+Amber's production ECC regime is `MDS-ECC`.
 
 Short summary:
 
-- deterministic `GF(256)` archive-domain ECC
-- built for appendable archives and rewrite-on-commit maintenance
-- operates over stored bytes
+- deterministic global Cauchy MDS code over `GF(2^16)`
+- operates over stored archive symbols
+- every repair symbol is dense over the protected data-symbol set
+- with `R` available repair symbols, repairs any `R` missing or corrupt data symbols
+- symbol size is chosen before writing so `data_symbols + repair_symbols <= 65,536`
+- large archives scale by increasing symbol size, not by splitting recovery into independent sets
 - supports plaintext and encrypted archives
 - uses one canonical policy rather than multiple operator-selectable ECC modes
-- uses continuous archive-wide parity geometry rather than fixed repair windows
 
-For standard groups, AMCF combines coverage sweep, local structure, bridge links, neighbor links, dense outer rows, and deterministic coefficient selection. Tiny groups use dense rows and enforce a minimum total parity floor of `6` rows.
-
-The on-disk global parity scheme name is `amcf`. Parity-bearing archives must store that scheme explicitly in AMCF metadata. Amber treats missing AMCF scheme metadata as malformed rather than guessing it during mutation.
+The on-disk global parity scheme name is `mds`. Parity-bearing archives must store that scheme explicitly in MDS metadata. Amber treats missing MDS scheme metadata as malformed rather than guessing it during mutation.
 
 Use [AMBER-ECC-DESIGN.md](./AMBER-ECC-DESIGN.md) for the architecture document.

@@ -8,11 +8,12 @@ use crate::archiveio::{
     assert_archive_output_path_clear, canonical_archive_base_path, discover_archive_segment_paths,
     is_multipart_segment_path, parent_dir_or_dot,
 };
-use crate::constants::{CODEC_DEFLATE, FLAG_ENCRYPTED};
+use crate::codec::compressed_len_upper_bound;
+use crate::constants::{CODEC_DEFLATE, DEFAULT_CHUNK_SIZE, FLAG_ENCRYPTED};
 use crate::ecc::repair_archive;
 use crate::repair::{inspect_archive_health, repair_archive_with_progress};
 use crate::error::{AmberError, AmberResult};
-use crate::harden::append_amcf_parity;
+use crate::harden::append_mds_parity;
 use crate::inputscan::scan_inputs;
 use crate::reader::ArchiveReader;
 use crate::rebuild::rebuild_archive;
@@ -348,6 +349,16 @@ pub fn seal_archive_with_progress(
             None,
             None,
         )?;
+        writer.configure_symbol_size_for_payload_bound(stored_payload_bytes_upper_bound(
+            &scanned,
+            DEFAULT_CHUNK_SIZE as u64,
+            if options.compress {
+                CODEC_DEFLATE
+            } else {
+                crate::constants::CODEC_NONE
+            },
+            options.password.is_some() || options.keyfile.is_some(),
+        )?)?;
         writer.open()?;
         for dir in &scanned.dirs {
             writer.add_dir(
@@ -396,6 +407,49 @@ pub fn seal_archive_with_progress(
     }
 
     seal_result
+}
+
+fn stored_payload_bytes_upper_bound(
+    scanned: &crate::inputscan::ScannedInputs,
+    chunk_size: u64,
+    codec_id: u16,
+    encrypted: bool,
+) -> AmberResult<u64> {
+    let mut total = 0u64;
+    for file in &scanned.files {
+        total = total
+            .checked_add(file_payload_bytes_upper_bound(
+                file.size, chunk_size, codec_id, encrypted,
+            )?)
+            .ok_or_else(|| AmberError::Invalid("archive payload size bound overflow".into()))?;
+    }
+    Ok(total)
+}
+
+fn file_payload_bytes_upper_bound(
+    size: u64,
+    chunk_size: u64,
+    codec_id: u16,
+    encrypted: bool,
+) -> AmberResult<u64> {
+    if size == 0 {
+        return Ok(0);
+    }
+    let chunks = size.div_ceil(chunk_size.max(1));
+    let mut bytes = 0u64;
+    for chunk in 0..chunks {
+        let offset = chunk.saturating_mul(chunk_size);
+        let raw_len = (size - offset).min(chunk_size);
+        bytes = bytes
+            .checked_add(compressed_len_upper_bound(codec_id, raw_len)?)
+            .ok_or_else(|| AmberError::Invalid("stored payload size bound overflow".into()))?;
+    }
+    if encrypted {
+        bytes = bytes
+            .checked_add(chunks.saturating_mul(16))
+            .ok_or_else(|| AmberError::Invalid("encrypted payload size bound overflow".into()))?;
+    }
+    Ok(bytes)
 }
 
 fn absolutize_operational_path(path: &Path) -> AmberResult<PathBuf> {
@@ -826,7 +880,7 @@ pub fn harden_command(
     keyfile: Option<&Path>,
 ) -> AmberResult<usize> {
     assert_archive_clean_for_harden(&archive, password, keyfile)?;
-    append_amcf_parity(archive, extra_ppm, password, keyfile)
+    append_mds_parity(archive, extra_ppm, password, keyfile)
 }
 
 pub fn assert_archive_clean_for_harden(
@@ -1147,7 +1201,7 @@ fn scrub_one(
     if verify.payload_ok && !verify.parity_ok && !do_repair {
         result.status = ScrubStatus::RepairNeeded;
         result.message = Some(format!(
-            "Payload verified, but repair redundancy is damaged ({} AMCF parity symbol(s)). Run 'amber repair --safe' to restore parity.",
+            "Payload verified, but repair redundancy is damaged ({} MDS parity symbol(s)). Run 'amber repair --safe' to restore parity.",
             verify.damaged_parity_symbols
         ));
         return result;
@@ -1186,7 +1240,7 @@ fn scrub_one(
         Ok(summary) if summary.payload_ok => {
             result.status = ScrubStatus::Failed;
             result.message = Some(format!(
-                "Payload verified, but repair redundancy is still damaged ({} AMCF parity symbol(s)).",
+                "Payload verified, but repair redundancy is still damaged ({} MDS parity symbol(s)).",
                 summary.damaged_parity_symbols
             ));
             return result;
@@ -1203,7 +1257,7 @@ fn scrub_one(
     }
 
     if harden_ppm > 0 {
-        match append_amcf_parity(&target, harden_ppm, password, keyfile) {
+        match append_mds_parity(&target, harden_ppm, password, keyfile) {
             Ok(added) => result.harden_added = added,
             Err(err) => {
                 result.status = ScrubStatus::Failed;

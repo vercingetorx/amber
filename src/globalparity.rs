@@ -1,16 +1,16 @@
-use crate::amcfadaptive::sample_amcf_combination;
+use crate::mds::{MDS_SCHEME_NAME, sample_mds_combination, validate_mds_dimensions};
 
-pub const GLOBAL_PARITY_SCHEME_AMCF: &str = "amcf";
+pub const GLOBAL_PARITY_SCHEME_MDS: &str = MDS_SCHEME_NAME;
 pub const MIN_TOTAL_PARITY_ROWS_FLOOR: usize = 6;
 pub const CANONICAL_ARCHIVAL_GLOBAL_EPSILON_PPM: usize = 170_000;
 pub const CANONICAL_ARCHIVAL_LOCAL_EQUIVALENT_K: usize = 12;
 
 pub fn validate_global_parity_scheme(scheme: &str) -> Result<&'static str, String> {
     let normalized = scheme.trim().to_ascii_lowercase();
-    if normalized != GLOBAL_PARITY_SCHEME_AMCF {
+    if normalized != GLOBAL_PARITY_SCHEME_MDS {
         return Err(format!("Unsupported global parity scheme: {scheme}"));
     }
-    Ok(GLOBAL_PARITY_SCHEME_AMCF)
+    Ok(GLOBAL_PARITY_SCHEME_MDS)
 }
 
 pub fn require_canonical_global_parity_scheme(scheme: &str) -> Result<&'static str, String> {
@@ -50,6 +50,7 @@ impl GenericGlobalParitySampler {
         if row_count == 0 {
             return Err("row_count must be positive for global parity sampling".into());
         }
+        validate_mds_dimensions(data_indices.len(), row_count)?;
         Ok(Self {
             scheme,
             seed_base,
@@ -58,7 +59,8 @@ impl GenericGlobalParitySampler {
         })
     }
 
-    pub fn combination(&self, seed_id: usize) -> Result<Vec<(usize, u8)>, String> {
-        sample_amcf_combination(&self.seed_base, seed_id, &self.data_indices, self.row_count)
+    pub fn combination(&self, seed_id: usize) -> Result<Vec<(usize, u16)>, String> {
+        let _seed_base = self.seed_base;
+        sample_mds_combination(seed_id, &self.data_indices, self.row_count)
     }
 }

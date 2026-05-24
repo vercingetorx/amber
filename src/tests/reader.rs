@@ -281,13 +281,13 @@
                     }]),
                 );
                 group.insert(
-                    "amcf".into(),
+                    "mds".into(),
                     TlvValue::Map({
-                        let mut amcf = TlvMap::new();
-                        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
-                        amcf.insert("epsilon_ppm".into(), TlvValue::U64(0));
-                        amcf.insert("parity".into(), TlvValue::List(vec![]));
-                        amcf
+                        let mut mds = TlvMap::new();
+                        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        mds.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        mds.insert("parity".into(), TlvValue::List(vec![]));
+                        mds
                     }),
                 );
                 group
@@ -335,6 +335,27 @@
             anchor.insert("version".into(), TlvValue::U64(1));
             anchor.insert("symbol_size".into(), TlvValue::U64(65_536));
             anchor.insert("merkle_root".into(), TlvValue::Bytes(vec![0; 32]));
+            anchor.insert("archive_uuid".into(), TlvValue::Bytes(archive_uuid.to_vec()));
+            anchor.insert("scheme".into(), TlvValue::String("mds".into()));
+            anchor.insert("total_symbol_count".into(), TlvValue::U64(1));
+            anchor.insert("data_symbol_count".into(), TlvValue::U64(1));
+            anchor.insert("parity_symbol_count".into(), TlvValue::U64(0));
+            anchor.insert(
+                "checkpoint_hash32".into(),
+                TlvValue::Bytes(
+                    crate::trailer::metadata_checkpoint_hash(
+                        archive_uuid,
+                        65_536,
+                        merkle_root,
+                        &[],
+                        "mds",
+                        1,
+                        1,
+                        0,
+                    )
+                    .to_vec(),
+                ),
+            );
             anchor.insert(
                 "symbols".into(),
                 TlvValue::List(vec![{
@@ -405,13 +426,13 @@
                     }]),
                 );
                 group.insert(
-                    "amcf".into(),
+                    "mds".into(),
                     TlvValue::Map({
-                        let mut amcf = TlvMap::new();
-                        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
-                        amcf.insert("epsilon_ppm".into(), TlvValue::U64(0));
-                        amcf.insert("parity".into(), TlvValue::List(vec![]));
-                        amcf
+                        let mut mds = TlvMap::new();
+                        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        mds.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        mds.insert("parity".into(), TlvValue::List(vec![]));
+                        mds
                     }),
                 );
                 group
@@ -488,13 +509,13 @@
                     }]),
                 );
                 group.insert(
-                    "amcf".into(),
+                    "mds".into(),
                     TlvValue::Map({
-                        let mut amcf = TlvMap::new();
-                        amcf.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
-                        amcf.insert("epsilon_ppm".into(), TlvValue::U64(0));
-                        amcf.insert("parity".into(), TlvValue::List(vec![]));
-                        amcf
+                        let mut mds = TlvMap::new();
+                        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        mds.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        mds.insert("parity".into(), TlvValue::List(vec![]));
+                        mds
                     }),
                 );
                 group

@@ -7,10 +7,11 @@ use crate::archiveio::{
     assert_archive_output_path_clear, canonical_archive_base_path, copy_archive_set,
     discover_archive_segment_paths, multipart_segment_path, parent_dir_or_dot,
 };
+use crate::codec::compressed_len_upper_bound;
 use crate::constants::FLAG_ENCRYPTED;
 use crate::error::{AmberError, AmberResult};
 use crate::globalparity::{
-    GLOBAL_PARITY_SCHEME_AMCF, MIN_TOTAL_PARITY_ROWS_FLOOR, require_canonical_global_parity_scheme,
+    GLOBAL_PARITY_SCHEME_MDS, MIN_TOTAL_PARITY_ROWS_FLOOR, require_canonical_global_parity_scheme,
 };
 use crate::reader::{ArchiveReader, Entry as ReaderEntry};
 use crate::tlv::{get_list, get_map, get_string};
@@ -32,7 +33,7 @@ pub struct RewritePlan {
     pub password: Option<String>,
     pub keyfile: Option<PathBuf>,
     pub part_size: Option<u64>,
-    pub amcf_epsilon_ppm: usize,
+    pub mds_epsilon_ppm: usize,
     pub min_total_parity_rows: Option<usize>,
     pub global_parity_scheme: String,
 }
@@ -108,7 +109,7 @@ pub fn rewrite_archive_to_path(
             } else {
                 Some(sb.multipart_part_size)
             },
-            amcf_epsilon_ppm: infer_amcf_epsilon(&reader),
+            mds_epsilon_ppm: infer_mds_epsilon(&reader),
             min_total_parity_rows: Some(infer_total_parity_rows(&reader)),
             global_parity_scheme: infer_global_parity_scheme(&reader)?,
         };
@@ -131,11 +132,18 @@ pub fn rewrite_archive_to_path(
             plan.password.as_deref(),
             plan.keyfile.as_deref(),
             plan.part_size,
-            Some(plan.amcf_epsilon_ppm),
+            Some(plan.mds_epsilon_ppm),
             plan.min_total_parity_rows,
             Some(&plan.global_parity_scheme),
             None,
         )?;
+        writer.configure_symbol_size_for_payload_bound(rewrite_payload_bytes_upper_bound(
+            reader.list(),
+            &staged_entries,
+            plan.default_chunk_size as u64,
+            plan.default_codec,
+            plan.password.is_some() || plan.keyfile.is_some(),
+        )?)?;
         writer.open()?;
         write_source_entries(&mut reader, &mut writer)?;
         write_staged_entries(&staged_entries, &mut writer)?;
@@ -337,12 +345,12 @@ fn validate_no_staged_path_conflicts(
     Ok(())
 }
 
-fn infer_amcf_epsilon(reader: &ArchiveReader) -> usize {
+fn infer_mds_epsilon(reader: &ArchiveReader) -> usize {
     let total_data = reader.symbols.iter().filter(|info| !info.is_parity).count();
     if total_data == 0 {
         return 0;
     }
-    let target = reader.amcf_parities.len();
+    let target = reader.mds_parities.len();
     if target == 0 {
         return 0;
     }
@@ -354,13 +362,13 @@ fn infer_total_parity_rows(reader: &ArchiveReader) -> usize {
     if data_count == 0 {
         return 0;
     }
-    reader.amcf_parities.len().max(MIN_TOTAL_PARITY_ROWS_FLOOR)
+    reader.mds_parities.len().max(MIN_TOTAL_PARITY_ROWS_FLOOR)
 }
 
 fn infer_global_parity_scheme(reader: &ArchiveReader) -> AmberResult<String> {
     let has_ecc_symbols = reader.symbols.iter().any(|symbol| symbol.is_parity);
-    if !has_ecc_symbols && reader.amcf_parities.is_empty() {
-        return Ok(GLOBAL_PARITY_SCHEME_AMCF.into());
+    if !has_ecc_symbols && reader.mds_parities.is_empty() {
+        return Ok(GLOBAL_PARITY_SCHEME_MDS.into());
     }
     let Some(index) = reader.index.as_ref() else {
         return Err(AmberError::Invalid(
@@ -374,26 +382,91 @@ fn infer_global_parity_scheme(reader: &ArchiveReader) -> AmberResult<String> {
     };
     let Some(group) = groups
         .iter()
-        .filter(|group| get_map(group, "amcf").is_some())
+        .filter(|group| get_map(group, "mds").is_some())
         .max_by_key(|group| crate::tlv::get_u64(group, "group_id").unwrap_or(0))
     else {
         return Err(AmberError::Invalid(
-            "archive with parity symbols is missing AMCF metadata".into(),
+            "archive with parity symbols is missing MDS metadata".into(),
         ));
     };
-    let Some(amcf) = get_map(group, "amcf") else {
+    let Some(mds) = get_map(group, "mds") else {
         return Err(AmberError::Invalid(
-            "archive with parity symbols is missing AMCF metadata".into(),
+            "archive with parity symbols is missing MDS metadata".into(),
         ));
     };
-    let Some(stored_scheme) = get_string(amcf, "scheme") else {
-        return Err(AmberError::Invalid(
-            "AMCF metadata is missing its scheme".into(),
-        ));
+    let Some(stored_scheme) = get_string(mds, "scheme") else {
+        return Err(AmberError::Invalid("MDS metadata is missing its scheme".into()));
     };
     Ok(require_canonical_global_parity_scheme(stored_scheme)
         .map_err(AmberError::Invalid)?
         .to_owned())
+}
+
+fn rewrite_payload_bytes_upper_bound(
+    source_entries: &[ReaderEntry],
+    staged_entries: &[StagedEntry],
+    default_chunk_size: u64,
+    default_codec: u16,
+    encrypted: bool,
+) -> AmberResult<u64> {
+    let mut total = 0u64;
+    for entry in source_entries {
+        if entry.kind != 0 {
+            continue;
+        }
+        let codec_id = entry
+            .file_codec
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or(default_codec);
+        let chunk_size = entry.chunk_size.unwrap_or(default_chunk_size);
+        total = total
+            .checked_add(entry_payload_bytes_upper_bound(
+                entry.size, chunk_size, codec_id, encrypted,
+            )?)
+            .ok_or_else(|| AmberError::Invalid("archive payload size bound overflow".into()))?;
+    }
+    for entry in staged_entries {
+        if entry.kind != 0 {
+            continue;
+        }
+        let codec_id = entry
+            .file_codec
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or(default_codec);
+        let chunk_size = entry.chunk_size.unwrap_or(default_chunk_size);
+        total = total
+            .checked_add(entry_payload_bytes_upper_bound(
+                entry.size, chunk_size, codec_id, encrypted,
+            )?)
+            .ok_or_else(|| AmberError::Invalid("archive payload size bound overflow".into()))?;
+    }
+    Ok(total)
+}
+
+fn entry_payload_bytes_upper_bound(
+    size: u64,
+    chunk_size: u64,
+    codec_id: u16,
+    encrypted: bool,
+) -> AmberResult<u64> {
+    if size == 0 {
+        return Ok(0);
+    }
+    let chunks = size.div_ceil(chunk_size.max(1));
+    let mut bytes = 0u64;
+    for chunk in 0..chunks {
+        let offset = chunk.saturating_mul(chunk_size);
+        let raw_len = (size - offset).min(chunk_size);
+        bytes = bytes
+            .checked_add(compressed_len_upper_bound(codec_id, raw_len)?)
+            .ok_or_else(|| AmberError::Invalid("stored payload size bound overflow".into()))?;
+    }
+    if encrypted {
+        bytes = bytes
+            .checked_add(chunks.saturating_mul(16))
+            .ok_or_else(|| AmberError::Invalid("encrypted payload size bound overflow".into()))?;
+    }
+    Ok(bytes)
 }
 
 fn write_source_entries(reader: &mut ArchiveReader, writer: &mut ArchiveWriter) -> AmberResult<()> {
