@@ -6,7 +6,9 @@ use crate::archiveio::{LogicalArchiveReader, canonical_archive_base_path};
 use crate::codec::Codec;
 use crate::constants::RTYPE_CHUNK;
 use crate::error::{AmberError, AmberResult};
-use crate::gf65536::{gf65536_add_bytes, gf65536_inv, gf65536_mul, gf65536_mul_bytes};
+use crate::gf65536::{
+    gf65536_inv, gf65536_mul, gf65536_mul_add_bytes, gf65536_mul_bytes,
+};
 use crate::hashutil::blake3_32;
 use crate::mds::sample_mds_combination;
 use crate::mutation::mutate_archive_via_work_copy;
@@ -323,8 +325,7 @@ fn repair_mds_parity(
                 complete = false;
                 break;
             };
-            let product = gf65536_mul_bytes(&data, coeff, reader.symbol_size as usize);
-            gf65536_add_bytes(&mut parity_bytes, &product);
+            gf65536_mul_add_bytes(&mut parity_bytes, &data, coeff);
         }
         if !complete {
             emit_progress(
@@ -452,8 +453,7 @@ fn repair_mds(
                     break;
                 }
             };
-            let product = gf65536_mul_bytes(&data, coeff, rhs.as_slice().len());
-            gf65536_add_bytes(rhs.as_mut_slice(), &product);
+            gf65536_mul_add_bytes(rhs.as_mut_slice(), &data, coeff);
         }
         if skip_eq || !has_unknown {
             continue;
@@ -538,8 +538,7 @@ fn repair_mds(
                 if let Some(cc) = cdict.get(&pos).copied()
                     && cc != 0
                 {
-                    let product = gf65536_mul_bytes(&value, cc, rr.as_slice().len());
-                    gf65536_add_bytes(rr.as_mut_slice(), &product);
+                    gf65536_mul_add_bytes(rr.as_mut_slice(), &value, cc);
                     cdict.insert(pos, 0);
                     if cdict.values().filter(|&&c| c != 0).count() == 1 {
                         q.push_back(ej);
@@ -703,8 +702,7 @@ fn solve_mds_equation_subset(
             if let Some(cc) = coeffs.get(spos).copied()
                 && cc != 0
             {
-                let product = gf65536_mul_bytes(sval, cc, rhs.as_slice().len());
-                gf65536_add_bytes(rhs.as_mut_slice(), &product);
+                gf65536_mul_add_bytes(rhs.as_mut_slice(), sval, cc);
             }
         }
         a.push(row);
@@ -765,9 +763,8 @@ fn solve_dense_system(
                         a[i][j] ^= gf65536_mul(a[r][j], factor);
                     }
                 }
-                let rhs_contrib =
-                    gf65536_mul_bytes(b[r].as_slice(), factor, b[r].as_slice().len());
-                gf65536_add_bytes(b[i].as_mut_slice(), &rhs_contrib);
+                let pivot_rhs = b[r].clone();
+                gf65536_mul_add_bytes(b[i].as_mut_slice(), pivot_rhs.as_slice(), factor);
             }
         }
         pivots[c] = Some(r);
