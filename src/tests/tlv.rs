@@ -93,7 +93,7 @@
                         ("symbol_size", TlvValue::U64(65_536)),
                         ("symbols", TlvValue::List(Vec::new())),
                         (
-                            "mds",
+                            "cauchy_rs",
                             TlvValue::Map(map_of([
                                 ("epsilon_ppm", TlvValue::U64(0)),
                                 ("parity", TlvValue::List(Vec::new())),
@@ -105,7 +105,7 @@
                         ("symbol_size", TlvValue::U64(65_536)),
                         ("symbols", TlvValue::List(Vec::new())),
                         (
-                            "mds",
+                            "cauchy_rs",
                             TlvValue::Map(map_of([
                                 ("epsilon_ppm", TlvValue::U64(0)),
                                 ("parity", TlvValue::List(Vec::new())),
@@ -155,7 +155,7 @@
                             ])]),
                         ),
                         (
-                            "mds",
+                            "cauchy_rs",
                             TlvValue::Map(map_of([
                                 ("epsilon_ppm", TlvValue::U64(0)),
                                 ("parity", TlvValue::List(Vec::new())),
@@ -177,7 +177,7 @@
                             ])]),
                         ),
                         (
-                            "mds",
+                            "cauchy_rs",
                             TlvValue::Map(map_of([
                                 ("epsilon_ppm", TlvValue::U64(0)),
                                 ("parity", TlvValue::List(Vec::new())),
@@ -200,7 +200,7 @@
     }
 
     #[test]
-    fn loads_index_rejects_excessive_total_mds_parity_count() {
+    fn loads_index_rejects_excessive_total_cauchy_rs_parity_count() {
         let payload = dumps_index(&map_of([
             (
                 "version",
@@ -217,7 +217,7 @@
                         ("symbol_size", TlvValue::U64(65_536)),
                         ("symbols", TlvValue::List(Vec::new())),
                         (
-                            "mds",
+                            "cauchy_rs",
                             TlvValue::Map(map_of([
                                 ("epsilon_ppm", TlvValue::U64(0)),
                                 (
@@ -239,7 +239,7 @@
                         ("symbol_size", TlvValue::U64(65_536)),
                         ("symbols", TlvValue::List(Vec::new())),
                         (
-                            "mds",
+                            "cauchy_rs",
                             TlvValue::Map(map_of([
                                 ("epsilon_ppm", TlvValue::U64(0)),
                                 (
@@ -263,12 +263,12 @@
         let err = loads_index(
             &payload,
             IndexLimits {
-                max_total_mds_parity: 1,
+                max_total_cauchy_rs_parity: 1,
                 ..IndexLimits::default()
             },
         )
         .unwrap_err();
-        assert!(err.to_string().contains("max total MDS parity"));
+        assert!(err.to_string().contains("max total Cauchy RS parity"));
     }
 
     #[test]
@@ -280,7 +280,7 @@
             65_536,
             merkle_root,
             b"0123456789abcdef",
-            "mds",
+            "cauchy-rs",
             8,
             7,
             1,
@@ -291,7 +291,7 @@
             ("merkle_root", TlvValue::Bytes(merkle_root.to_vec())),
             ("archive_uuid", TlvValue::Bytes(archive_uuid.to_vec())),
             ("seed_base", TlvValue::Bytes(b"0123456789abcdef".to_vec())),
-            ("scheme", TlvValue::String("mds".into())),
+            ("scheme", TlvValue::String("cauchy-rs".into())),
             ("total_symbol_count", TlvValue::U64(8)),
             ("data_symbol_count", TlvValue::U64(7)),
             ("parity_symbol_count", TlvValue::U64(1)),

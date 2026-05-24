@@ -21,8 +21,8 @@ pub struct IndexLimits {
     pub max_ecc_groups: usize,
     pub max_symbols: usize,
     pub max_total_symbols: usize,
-    pub max_mds_parity: usize,
-    pub max_total_mds_parity: usize,
+    pub max_cauchy_rs_parity: usize,
+    pub max_total_cauchy_rs_parity: usize,
     pub max_total_anchors: usize,
     pub max_total_segments: usize,
 }
@@ -35,8 +35,8 @@ impl Default for IndexLimits {
             max_ecc_groups: 100_000,
             max_symbols: 5_000_000,
             max_total_symbols: 5_000_000,
-            max_mds_parity: 5_000_000,
-            max_total_mds_parity: 5_000_000,
+            max_cauchy_rs_parity: 5_000_000,
+            max_total_cauchy_rs_parity: 5_000_000,
             max_total_anchors: 100_000,
             max_total_segments: 100_000,
         }
@@ -165,24 +165,24 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                 2,
                 &varint_encode(get_u64(group, "symbol_size").unwrap_or(0)),
             )?);
-            let mds = get_map(group, "mds");
-            let mut mds_payload = Vec::new();
-            if let Some(mds) = mds {
-                if let Some(seed_base) = get_bytes(mds, "seed_base") {
-                    require_nonempty_bytes("ecc_groups.mds.seed_base", seed_base)?;
-                    mds_payload.extend(tlv(1, seed_base)?);
+            let cauchy_rs = get_map(group, "cauchy_rs");
+            let mut cauchy_rs_payload = Vec::new();
+            if let Some(cauchy_rs) = cauchy_rs {
+                if let Some(seed_base) = get_bytes(cauchy_rs, "seed_base") {
+                    require_nonempty_bytes("ecc_groups.cauchy_rs.seed_base", seed_base)?;
+                    cauchy_rs_payload.extend(tlv(1, seed_base)?);
                 }
-                mds_payload.extend(tlv(
+                cauchy_rs_payload.extend(tlv(
                     2,
-                    &varint_encode(get_u64(mds, "epsilon_ppm").unwrap_or(0)),
+                    &varint_encode(get_u64(cauchy_rs, "epsilon_ppm").unwrap_or(0)),
                 )?);
-                if let Some(scheme) = get_string(mds, "scheme") {
+                if let Some(scheme) = get_string(cauchy_rs, "scheme") {
                     if !scheme.is_empty() {
-                        mds_payload.extend(tlv(7, scheme.as_bytes())?);
+                        cauchy_rs_payload.extend(tlv(7, scheme.as_bytes())?);
                     }
                 }
                 let mut parity_payload = Vec::new();
-                if let Some(parity_list) = get_list(mds, "parity") {
+                if let Some(parity_list) = get_list(cauchy_rs, "parity") {
                     for parity in parity_list {
                         let mut pp = Vec::new();
                         pp.extend(tlv(
@@ -202,11 +202,11 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                             &varint_encode(get_u64(parity, "length").unwrap_or(0)),
                         )?);
                         if let Some(tag) = get_bytes(parity, "tag32") {
-                            require_nonempty_bytes("ecc_groups.mds.parity.tag32", tag)?;
+                            require_nonempty_bytes("ecc_groups.cauchy_rs.parity.tag32", tag)?;
                             pp.extend(tlv(5, tag)?);
                         }
                         if let Some(seed_base) = get_bytes(parity, "seed_base") {
-                            require_nonempty_bytes("ecc_groups.mds.parity.seed_base", seed_base)?;
+                            require_nonempty_bytes("ecc_groups.cauchy_rs.parity.seed_base", seed_base)?;
                             pp.extend(tlv(6, seed_base)?);
                         }
                         if let Some(row_count) = get_u64(parity, "row_count") {
@@ -216,12 +216,12 @@ pub fn dumps_index(idx: &TlvMap) -> AmberResult<Vec<u8>> {
                     }
                 }
                 if !parity_payload.is_empty() {
-                    mds_payload.extend(tlv(3, &parity_payload)?);
+                    cauchy_rs_payload.extend(tlv(3, &parity_payload)?);
                 }
             } else {
-                mds_payload.extend(tlv(2, &varint_encode(0))?);
+                cauchy_rs_payload.extend(tlv(2, &varint_encode(0))?);
             }
-            group_payload.extend(tlv(4, &mds_payload)?);
+            group_payload.extend(tlv(4, &cauchy_rs_payload)?);
 
             let mut symbols_payload = Vec::new();
             if let Some(symbols) = get_list(group, "symbols") {
@@ -332,7 +332,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
     let mut segments = Vec::new();
     let mut total_chunks = 0usize;
     let mut total_symbols = 0usize;
-    let mut total_mds_parity = 0usize;
+    let mut total_cauchy_rs_parity = 0usize;
 
     for (tag, payload) in iter_tlvs(data)? {
         match tag {
@@ -499,7 +499,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                     }
                     let mut group = TlvMap::new();
                     let mut symbols = Vec::new();
-                    let mut mds = map_of([("parity", TlvValue::List(Vec::new()))]);
+                    let mut cauchy_rs = map_of([("parity", TlvValue::List(Vec::new()))]);
                     for (gt, gv) in iter_tlvs(gpl)? {
                         match gt {
                             1 => {
@@ -601,17 +601,17 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                                                     }
                                                 }
                                                 plist.push(pd);
-                                                if plist.len() > limits.max_mds_parity {
+                                                if plist.len() > limits.max_cauchy_rs_parity {
                                                     return Err(AmberError::Invalid(
-                                                        "Index exceeds max MDS parity limit"
+                                                        "Index exceeds max Cauchy RS parity limit"
                                                             .into(),
                                                     ));
                                                 }
-                                                total_mds_parity += 1;
-                                                if total_mds_parity > limits.max_total_mds_parity
+                                                total_cauchy_rs_parity += 1;
+                                                if total_cauchy_rs_parity > limits.max_total_cauchy_rs_parity
                                                 {
                                                     return Err(AmberError::Invalid(
-                                                        "Index exceeds max total MDS parity limit"
+                                                        "Index exceeds max total Cauchy RS parity limit"
                                                             .into(),
                                                     ));
                                                 }
@@ -621,7 +621,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                                     }
                                 }
                                 local.insert("parity".into(), TlvValue::List(plist));
-                                mds = local;
+                                cauchy_rs = local;
                             }
                             5 => {
                                 for (st, sv) in iter_tlvs(gv)? {
@@ -700,7 +700,7 @@ pub fn loads_index(data: &[u8], limits: IndexLimits) -> AmberResult<TlvMap> {
                         }
                     }
                     group.insert("symbols".into(), TlvValue::List(symbols));
-                    group.insert("mds".into(), TlvValue::Map(mds));
+                    group.insert("cauchy_rs".into(), TlvValue::Map(cauchy_rs));
                     ecc_groups.push(group);
                 }
             }

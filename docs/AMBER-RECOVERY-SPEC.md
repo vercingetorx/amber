@@ -8,7 +8,7 @@ Purpose:
 
 ## Recovery goals
 
-- provide exact full archive recovery whenever damage is within the committed MDS repair budget
+- provide exact full archive recovery whenever damage is within the committed Cauchy RS repair budget
 - when full recovery is impossible, maximize verified structural recovery
 - never promote guessed or weakly inferred data as valid recovered output
 
@@ -58,7 +58,7 @@ Phase 3: structural repair
 
 Phase 4: content reconstruction
 
-- apply the archive MDS code to damaged or missing stored symbols
+- apply the archive Cauchy RS code to damaged or missing stored symbols
 - preserve verified good data and minimize unnecessary rewriting
 
 Phase 5: verification and promotion
@@ -77,10 +77,10 @@ Phase 6: post-recovery hardening
 - metadata reconstruction
   - reader state can be rebuilt from surviving records
 - checkpoint validation
-  - metadata checkpoints are accepted only when their archive UUID, symbol counts, symbol size, MDS identity, Merkle root, and checkpoint hash agree
+  - metadata checkpoints are accepted only when their archive UUID, symbol counts, symbol size, Cauchy RS identity, Merkle root, and checkpoint hash agree
 - parity-aware repair
   - repair handles damaged data and damaged parity together
-- MDS-bound correctness
+- Cauchy RS-bound correctness
   - if `R` repair symbols survive, any `R` damaged data symbols in the protected set are recoverable
 - encryption-aware recovery
   - encrypted archives require correct credentials for encrypted content recovery

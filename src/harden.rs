@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::AmberResult;
 use crate::globalparity::{
-    GLOBAL_PARITY_SCHEME_MDS, MIN_TOTAL_PARITY_ROWS_FLOOR, require_canonical_global_parity_scheme,
+    GLOBAL_PARITY_SCHEME_CAUCHY_RS, MIN_TOTAL_PARITY_ROWS_FLOOR, require_canonical_global_parity_scheme,
 };
 use crate::mutation::{RewritePlan, rewrite_archive_in_place};
 use crate::reader::ArchiveReader;
 
-pub fn append_mds_parity(
+pub fn append_cauchy_rs_parity(
     path: impl AsRef<Path>,
     extra_ppm: usize,
     password: Option<&str>,
@@ -17,7 +17,7 @@ pub fn append_mds_parity(
     append_global_parity(
         path,
         extra_ppm,
-        GLOBAL_PARITY_SCHEME_MDS,
+        GLOBAL_PARITY_SCHEME_CAUCHY_RS,
         password,
         keyfile,
     )
@@ -60,7 +60,7 @@ pub fn append_global_parity(
             *added_rows_capture
                 .lock()
                 .expect("added_rows mutex poisoned") =
-                target_total.saturating_sub(reader.mds_parities.len());
+                target_total.saturating_sub(reader.cauchy_rs_parities.len());
             let epsilon_ppm = if data_count == 0 {
                 0
             } else {
@@ -72,7 +72,7 @@ pub fn append_global_parity(
                 password: plan.password,
                 keyfile: plan.keyfile,
                 part_size: plan.part_size,
-                mds_epsilon_ppm: epsilon_ppm,
+                cauchy_rs_epsilon_ppm: epsilon_ppm,
                 min_total_parity_rows: Some(target_total),
                 global_parity_scheme: scheme_capture.clone(),
             })
@@ -85,7 +85,7 @@ pub fn append_global_parity(
 
 fn target_total_rows(reader: &ArchiveReader, extra_ppm: usize) -> usize {
     let data_count = reader.symbols.iter().filter(|sym| !sym.is_parity).count();
-    let existing_total = reader.mds_parities.len();
+    let existing_total = reader.cauchy_rs_parities.len();
     let added = (if data_count >= 2 { 2 } else { 1 }).max(data_count * extra_ppm / 1_000_000);
     (existing_total + added).max(MIN_TOTAL_PARITY_ROWS_FLOOR)
 }

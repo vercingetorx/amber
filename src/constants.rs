@@ -30,7 +30,7 @@ pub const RFLAG_PARITY_RECORD: u8 = 1 << 2;
 pub const CODEC_NONE: u16 = 0;
 pub const CODEC_DEFLATE: u16 = 1;
 pub const CODEC_ZSTD: u16 = 2;
-pub const CODEC_MDS_PARITY: u16 = 0x8201;
+pub const CODEC_CAUCHY_RS_PARITY: u16 = 0x8201;
 
 pub const DEFAULT_CHUNK_SIZE: u32 = 262_144;
 pub const DEFAULT_CODEC_ID: u16 = CODEC_NONE;

@@ -4,7 +4,7 @@
 
     use filetime::{FileTime, set_file_times};
 
-    use super::{ArchiveWriter, CANONICAL_WRITER_INFO, DEFAULT_SYMBOL_SIZE, recommended_mds_symbol_size};
+    use super::{ArchiveWriter, CANONICAL_WRITER_INFO, DEFAULT_SYMBOL_SIZE, recommended_cauchy_rs_symbol_size};
     use crate::archiveio::LogicalArchiveReader;
     use crate::constants::{CODEC_ZSTD, RTYPE_ENTRY_BEGIN};
     use crate::records::read_record_at_bounded;
@@ -27,11 +27,11 @@
     }
 
     #[test]
-    fn writer_symbol_size_scales_to_fit_gf65536_mds_tag_space() {
-        let small = recommended_mds_symbol_size(1024 * 1024, None, None).unwrap();
+    fn writer_symbol_size_scales_to_fit_gf65536_cauchy_rs_tag_space() {
+        let small = recommended_cauchy_rs_symbol_size(1024 * 1024, None, None).unwrap();
         assert_eq!(small, DEFAULT_SYMBOL_SIZE);
 
-        let large = recommended_mds_symbol_size(16 * 1024 * 1024 * 1024, None, None).unwrap();
+        let large = recommended_cauchy_rs_symbol_size(16 * 1024 * 1024 * 1024, None, None).unwrap();
         assert!(large > DEFAULT_SYMBOL_SIZE);
         assert_eq!(large % 2, 0);
     }

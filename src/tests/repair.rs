@@ -132,7 +132,7 @@
             .unwrap();
         writer.finalize().unwrap();
         writer.close();
-        crate::harden::append_mds_parity(&archive, 300_000, None, None).unwrap();
+        crate::harden::append_cauchy_rs_parity(&archive, 300_000, None, None).unwrap();
         archive
     }
 
@@ -326,7 +326,7 @@
     }
 
     #[test]
-    fn mds_tinyn_repair_n3_n5() {
+    fn cauchy_rs_tinyn_repair_n3_n5() {
         let tmp = tempdir();
         run_tiny_n_repair(&tmp, 3);
         run_tiny_n_repair(&tmp, 5);
@@ -367,7 +367,7 @@
     }
 
     #[test]
-    fn mds_mixed_groups_small_append_repair() {
+    fn cauchy_rs_mixed_groups_small_append_repair() {
         let tmp = tempdir();
         let (archive, _small_file) = build_mixed_group_archive(&tmp, None);
 
@@ -567,7 +567,7 @@
     fn parity_symbol_corruption_is_tolerated_when_repairing_data() {
         let tmp = tempdir();
         let archive = build_sample_archive(&tmp, None);
-        crate::harden::append_mds_parity(&archive, 300_000, None, None).unwrap();
+        crate::harden::append_cauchy_rs_parity(&archive, 300_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -910,7 +910,7 @@
     fn random_data_losses_under_budget() {
         let tmp = tempdir();
         let archive = build_sample_archive(&tmp, None);
-        crate::harden::append_mds_parity(&archive, 500_000, None, None).unwrap();
+        crate::harden::append_cauchy_rs_parity(&archive, 500_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -953,10 +953,10 @@
     }
 
     #[test]
-    fn mds_archive_repairs_end_to_end() {
+    fn cauchy_rs_archive_repairs_end_to_end() {
         let tmp = tempdir();
         let archive = build_sample_archive(&tmp, None);
-        crate::harden::append_mds_parity(&archive, 800_000, None, None).unwrap();
+        crate::harden::append_cauchy_rs_parity(&archive, 800_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -1117,7 +1117,7 @@
         writer.close();
 
         append_to_archive(&archive, &[&append], None, None).unwrap();
-        crate::harden::append_mds_parity(&archive, 150_000, None, None).unwrap();
+        crate::harden::append_cauchy_rs_parity(&archive, 150_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -1198,7 +1198,7 @@
         writer.close();
 
         append_to_archive(&archive, &[&append], None, None).unwrap();
-        crate::harden::append_mds_parity(&archive, 150_000, None, None).unwrap();
+        crate::harden::append_cauchy_rs_parity(&archive, 150_000, None, None).unwrap();
 
         let mut reader = ArchiveReader::new(&archive);
         reader.open().unwrap();
@@ -1264,7 +1264,7 @@
         drop(rw);
 
         let err =
-            crate::harden::append_mds_parity(&archive, 300_000, Some("secret"), None).unwrap_err();
+            crate::harden::append_cauchy_rs_parity(&archive, 300_000, Some("secret"), None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Verification failed before hardening.")
@@ -1274,7 +1274,7 @@
         assert!(!repair.repaired_data.is_empty());
 
         let added =
-            crate::harden::append_mds_parity(&archive, 300_000, Some("secret"), None).unwrap();
+            crate::harden::append_cauchy_rs_parity(&archive, 300_000, Some("secret"), None).unwrap();
         assert!(added >= 1);
 
         let result = repair_archive(&archive, Some("secret"), None, None).unwrap();

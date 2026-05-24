@@ -5,13 +5,13 @@ use std::path::Path;
 use crate::archiveio::{LogicalArchiveAppender, LogicalArchiveReader};
 use crate::codec::Codec;
 use crate::constants::{
-    CODEC_MDS_PARITY, FLAG_ENCRYPTED, KDF_ARGON2ID_V2, REC_SYNC, RTYPE_ANCHOR, RTYPE_CHUNK,
+    CODEC_CAUCHY_RS_PARITY, FLAG_ENCRYPTED, KDF_ARGON2ID_V2, REC_SYNC, RTYPE_ANCHOR, RTYPE_CHUNK,
     RTYPE_ENTRY_BEGIN, VERSION_MAJOR, VERSION_MINOR,
 };
 use crate::crc32c::crc32c;
 use crate::encryption::{EncryptionContext, EncryptionParams, derive_user_secret};
 use crate::error::{AmberError, AmberResult};
-use crate::globalparity::validate_global_parity_scheme;
+use crate::globalparity::{GLOBAL_PARITY_SCHEME_CAUCHY_RS, validate_global_parity_scheme};
 use crate::hashutil::{blake3_32, merkle_leaf_from_chunk_tag, merkle_parent};
 use crate::records::{RECORD_HEADER_SIZE, parse_chunk_header_ext, read_record_at_bounded};
 use crate::superblock::{SUPERBLOCK_SIZE, read_superblock};
@@ -34,8 +34,8 @@ pub fn rebuild_index(
     let mut entries: Vec<TlvMap> = Vec::new();
     let mut entry_map: BTreeMap<u64, usize> = BTreeMap::new();
     let mut symbols: Vec<TlvMap> = Vec::new();
-    let mut mds_parities: Vec<TlvMap> = Vec::new();
-    let mut mds_seed_base = Vec::new();
+    let mut cauchy_rs_parities: Vec<TlvMap> = Vec::new();
+    let mut cauchy_rs_seed_base = Vec::new();
     let mut global_parity_scheme: Option<String> = None;
     let mut anchors_meta_raw: Vec<RawAnchorMeta> = Vec::new();
 
@@ -156,7 +156,7 @@ pub fn rebuild_index(
                 }
 
                 let header_bytes = [fixed.as_slice(), header_ext.as_slice()].concat();
-                if codec_id == CODEC_MDS_PARITY {
+                if codec_id == CODEC_CAUCHY_RS_PARITY {
                     let dec_payload = if let Some(decryptor) = decryptor.as_ref() {
                         decryptor.decrypt(&header_bytes, &payload, &rec_start.to_le_bytes())?
                     } else {
@@ -182,7 +182,7 @@ pub fn rebuild_index(
                     parity.insert("tag32".into(), TlvValue::Bytes(parity_tag.to_vec()));
                     parity.insert("seed_base".into(), TlvValue::Bytes(aux16.to_vec()));
                     parity.insert("row_count".into(), TlvValue::U64(0));
-                    mds_parities.push(parity);
+                    cauchy_rs_parities.push(parity);
                 } else {
                     let trusted_symbol_tags = match decryptor.as_ref() {
                         Some(decryptor) => decryptor
@@ -338,7 +338,7 @@ pub fn rebuild_index(
     let canonical_seed_base = if !seed_candidates.is_empty() {
         most_common_non_empty_bytes(&seed_candidates)
     } else {
-        let parity_seed_candidates = mds_parities
+        let parity_seed_candidates = cauchy_rs_parities
             .iter()
             .filter_map(|item| get_bytes(item, "seed_base").map(|bytes| bytes.to_vec()))
             .collect::<Vec<_>>();
@@ -360,21 +360,21 @@ pub fn rebuild_index(
         anchors.push(item);
     }
     if !canonical_seed_base.is_empty() {
-        mds_seed_base = canonical_seed_base.clone();
+        cauchy_rs_seed_base = canonical_seed_base.clone();
     }
     let scheme_candidates = validated_anchors
         .iter()
         .filter_map(|anchor| anchor.scheme.clone())
         .collect::<Vec<_>>();
-    if !mds_parities.is_empty() && !scheme_candidates.is_empty() {
+    if !cauchy_rs_parities.is_empty() && !scheme_candidates.is_empty() {
         global_parity_scheme = Some(
             validate_global_parity_scheme(&most_common_non_empty_string(&scheme_candidates))
                 .map_err(AmberError::Invalid)?
                 .to_owned(),
         );
-    } else if !mds_parities.is_empty() {
+    } else if !cauchy_rs_parities.is_empty() {
         global_parity_scheme = Some(
-            validate_global_parity_scheme("mds")
+            validate_global_parity_scheme(GLOBAL_PARITY_SCHEME_CAUCHY_RS)
                 .map_err(AmberError::Invalid)?
                 .to_owned(),
         );
@@ -414,52 +414,52 @@ pub fn rebuild_index(
         )));
     }
 
-    let usable_global_parities = if !mds_seed_base.is_empty() && global_parity_scheme.is_some() {
-        let scanned_row_count = mds_parities
+    let usable_global_parities = if !cauchy_rs_seed_base.is_empty() && global_parity_scheme.is_some() {
+        let scanned_row_count = cauchy_rs_parities
             .iter()
-            .filter(|item| get_bytes(item, "seed_base").unwrap_or(&[]) == mds_seed_base.as_slice())
+            .filter(|item| get_bytes(item, "seed_base").unwrap_or(&[]) == cauchy_rs_seed_base.as_slice())
             .count() as u64;
-        for item in &mut mds_parities {
+        for item in &mut cauchy_rs_parities {
             if get_u64(item, "row_count").unwrap_or(0) == 0
-                && get_bytes(item, "seed_base").unwrap_or(&[]) == mds_seed_base.as_slice()
+                && get_bytes(item, "seed_base").unwrap_or(&[]) == cauchy_rs_seed_base.as_slice()
             {
                 item.insert("row_count".into(), TlvValue::U64(scanned_row_count));
             }
         }
-        mds_parities
+        cauchy_rs_parities
             .iter()
-            .filter(|item| get_bytes(item, "seed_base").unwrap_or(&[]) == mds_seed_base.as_slice())
+            .filter(|item| get_bytes(item, "seed_base").unwrap_or(&[]) == cauchy_rs_seed_base.as_slice())
             .cloned()
             .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
-    let mds_info = if !usable_global_parities.is_empty() {
+    let cauchy_rs_info = if !usable_global_parities.is_empty() {
         let data_symbol_count = symbols
             .iter()
             .filter(|s| !get_bool(s, "is_parity").unwrap_or(false))
             .count();
-        let mut mds = TlvMap::new();
-        mds.insert(
+        let mut cauchy_rs = TlvMap::new();
+        cauchy_rs.insert(
             "scheme".into(),
             TlvValue::String(
                 global_parity_scheme
                     .clone()
-                    .unwrap_or_else(|| "mds".into()),
+                    .unwrap_or_else(|| GLOBAL_PARITY_SCHEME_CAUCHY_RS.into()),
             ),
         );
-        mds.insert("seed_base".into(), TlvValue::Bytes(mds_seed_base.clone()));
-        mds.insert(
+        cauchy_rs.insert("seed_base".into(), TlvValue::Bytes(cauchy_rs_seed_base.clone()));
+        cauchy_rs.insert(
             "epsilon_ppm".into(),
             TlvValue::U64(
                 (usable_global_parities.len() * 1_000_000 / data_symbol_count.max(1)) as u64,
             ),
         );
-        mds.insert(
+        cauchy_rs.insert(
             "parity".into(),
             TlvValue::List(usable_global_parities.clone()),
         );
-        Some(mds)
+        Some(cauchy_rs)
     } else {
         None
     };
@@ -508,8 +508,8 @@ pub fn rebuild_index(
                     let mut group = TlvMap::new();
                     group.insert("group_id".into(), TlvValue::U64(1));
                     group.insert("symbol_size".into(), TlvValue::U64(symbol_size));
-                    if let Some(mds) = &mds_info {
-                        group.insert("mds".into(), TlvValue::Map(mds.clone()));
+                    if let Some(cauchy_rs) = &cauchy_rs_info {
+                        group.insert("cauchy_rs".into(), TlvValue::Map(cauchy_rs.clone()));
                     }
                     group.insert("symbols".into(), TlvValue::List(symbols.clone()));
                     group
@@ -569,7 +569,7 @@ fn discover_rebuild_symbol_size(
                     skip_rebuild_payload(&mut file, payload_len)?;
                     continue;
                 };
-                if codec_id != CODEC_MDS_PARITY {
+                if codec_id != CODEC_CAUCHY_RS_PARITY {
                     skip_rebuild_payload(&mut file, payload_len)?;
                     continue;
                 }

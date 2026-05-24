@@ -13,7 +13,7 @@ use crate::constants::{CODEC_DEFLATE, DEFAULT_CHUNK_SIZE, FLAG_ENCRYPTED};
 use crate::ecc::repair_archive;
 use crate::repair::{inspect_archive_health, repair_archive_with_progress};
 use crate::error::{AmberError, AmberResult};
-use crate::harden::append_mds_parity;
+use crate::harden::append_cauchy_rs_parity;
 use crate::inputscan::scan_inputs;
 use crate::reader::ArchiveReader;
 use crate::rebuild::rebuild_archive;
@@ -880,7 +880,7 @@ pub fn harden_command(
     keyfile: Option<&Path>,
 ) -> AmberResult<usize> {
     assert_archive_clean_for_harden(&archive, password, keyfile)?;
-    append_mds_parity(archive, extra_ppm, password, keyfile)
+    append_cauchy_rs_parity(archive, extra_ppm, password, keyfile)
 }
 
 pub fn assert_archive_clean_for_harden(
@@ -1201,7 +1201,7 @@ fn scrub_one(
     if verify.payload_ok && !verify.parity_ok && !do_repair {
         result.status = ScrubStatus::RepairNeeded;
         result.message = Some(format!(
-            "Payload verified, but repair redundancy is damaged ({} MDS parity symbol(s)). Run 'amber repair --safe' to restore parity.",
+            "Payload verified, but repair redundancy is damaged ({} Cauchy RS parity symbol(s)). Run 'amber repair --safe' to restore parity.",
             verify.damaged_parity_symbols
         ));
         return result;
@@ -1240,7 +1240,7 @@ fn scrub_one(
         Ok(summary) if summary.payload_ok => {
             result.status = ScrubStatus::Failed;
             result.message = Some(format!(
-                "Payload verified, but repair redundancy is still damaged ({} MDS parity symbol(s)).",
+                "Payload verified, but repair redundancy is still damaged ({} Cauchy RS parity symbol(s)).",
                 summary.damaged_parity_symbols
             ));
             return result;
@@ -1257,7 +1257,7 @@ fn scrub_one(
     }
 
     if harden_ppm > 0 {
-        match append_mds_parity(&target, harden_ppm, password, keyfile) {
+        match append_cauchy_rs_parity(&target, harden_ppm, password, keyfile) {
             Ok(added) => result.harden_added = added,
             Err(err) => {
                 result.status = ScrubStatus::Failed;

@@ -1,13 +1,13 @@
-# MDS-ECC Design
+# Cauchy Reed-Solomon ECC Design
 
 Status:
 
 - current production ECC design for Amber
 - canonical architecture document
 
-## What MDS-ECC is
+## What Cauchy Reed-Solomon ECC is
 
-`MDS-ECC` is Amber's global maximum-distance-separable archive ECC.
+`Cauchy Reed-Solomon ECC` is Amber's global maximum-distance-separable archive ECC.
 
 Amber splits stored archive bytes into fixed-size symbols. It then emits dense global repair symbols using a deterministic Cauchy matrix over `GF(2^16)`.
 
@@ -32,7 +32,7 @@ Amber ECC must satisfy all of these at once:
 
 ## Storage domain
 
-MDS protects stored bytes.
+Cauchy Reed-Solomon protects stored bytes.
 
 That means:
 
@@ -67,13 +67,13 @@ The coefficient for repair row `r` and data symbol `i` is:
 inverse(row_tag[r] XOR column_tag[i]) in GF(2^16)
 ```
 
-Because all row tags are distinct, all column tags are distinct, and the two tag ranges are disjoint under the bound above, every square submatrix of the Cauchy matrix is nonsingular. That is the MDS property.
+Because all row tags are distinct, all column tags are distinct, and the two tag ranges are disjoint under the bound above, every square submatrix of the Cauchy matrix is nonsingular. That is why the Reed-Solomon construction is maximum-distance-separable.
 
 Each repair symbol is dense: it contains one `GF(2^16)` linear combination of every data symbol, applied lane-by-lane across the stored symbol bytes.
 
 ## Operational properties
 
-MDS supports:
+Cauchy Reed-Solomon supports:
 
 - seal-time parity generation
 - later hardening that appends additional repair rows canonically
@@ -82,7 +82,7 @@ MDS supports:
 
 Hardening does not change existing row definitions. Row `r` is always the same Cauchy row for a given data-symbol count. Adding parity appends later rows.
 
-The archive commits its symbol size in ECC metadata and anchor records. Anchor records also contain a compact metadata checkpoint: archive UUID, symbol size, MDS scheme, symbol counts, seed base, Merkle root, and a BLAKE3 hash over those fields. Rebuild uses validated checkpoints or parity records to recover the committed symbol size before reconstructing the symbol table.
+The archive commits its symbol size in ECC metadata and anchor records. Anchor records also contain a compact metadata checkpoint: archive UUID, symbol size, Cauchy RS scheme, symbol counts, seed base, Merkle root, and a BLAKE3 hash over those fields. Rebuild uses validated checkpoints or parity records to recover the committed symbol size before reconstructing the symbol table.
 
 ## Canonical policy
 
@@ -90,12 +90,12 @@ Amber uses one production ECC policy.
 
 Notable rules:
 
-- the on-disk global parity scheme name is `mds`
-- parity-bearing archives must store explicit MDS scheme metadata
+- the on-disk global parity scheme name is `cauchy-rs`
+- parity-bearing archives must store explicit Cauchy RS scheme metadata
 - hardening increases parity budget canonically
 - repair never promotes guessed data
 - metadata checkpoints either validate exactly or are ignored as damaged
-- successful repair restores both damaged data symbols and recomputable damaged MDS parity symbols
+- successful repair restores both damaged data symbols and recomputable damaged Cauchy RS parity symbols
 - harden requires a clean archive
 
 ## Scaling
@@ -110,6 +110,6 @@ data_symbols + repair_symbols <= 65,536
 
 Splitting into independent recovery sets weakens the global recovery guarantee and is not the canonical design.
 
-The writer chooses symbol size before emitting records. It uses codec-specific stored-size upper bounds, not observed compression output guesses, because the MDS tag-space requirement must be satisfied before parity generation starts.
+The writer chooses symbol size before emitting records. It uses codec-specific stored-size upper bounds, not observed compression output guesses, because the `GF(2^16)` tag-space requirement must be satisfied before parity generation starts.
 
 The default symbol size is `64 KiB`. Larger archives use larger symbols as needed. If the required symbol size would exceed the on-disk parity payload length field, archive creation fails explicitly.

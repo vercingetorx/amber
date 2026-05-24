@@ -10,7 +10,7 @@ use crate::gf65536::{
     gf65536_inv, gf65536_mul, gf65536_mul_add_bytes, gf65536_mul_bytes,
 };
 use crate::hashutil::blake3_32;
-use crate::mds::sample_mds_combination;
+use crate::cauchy_rs::sample_cauchy_rs_combination;
 use crate::mutation::mutate_archive_via_work_copy;
 use crate::reader::{ArchiveReader, SymbolInfo};
 use crate::records::{parse_chunk_header_ext, read_record_at_bounded};
@@ -192,7 +192,9 @@ fn repair_work_archive(
                 let rebuilt = rebuild_index(target, password, keyfile)?;
                 emit_progress(
                     progress,
-                    format!("repair: rebuilt index ({rebuilt} MDS parity symbol(s)) before repair"),
+                    format!(
+                        "repair: rebuilt index ({rebuilt} Cauchy RS parity symbol(s)) before repair"
+                    ),
                 );
                 let reader = open_reader(target, password, keyfile)?;
                 let mut result = repair_archive_in_place(&reader, target, progress)?;
@@ -206,7 +208,9 @@ fn repair_work_archive(
             let rebuilt = rebuild_index(target, password, keyfile)?;
             emit_progress(
                 progress,
-                format!("repair: rebuilt index ({rebuilt} MDS parity symbol(s)) and attempted repair"),
+                format!(
+                    "repair: rebuilt index ({rebuilt} Cauchy RS parity symbol(s)) and attempted repair"
+                ),
             );
             let reader = open_reader(target, password, keyfile)?;
             let mut result = repair_archive_in_place(&reader, target, progress)?;
@@ -230,11 +234,11 @@ fn repair_archive_in_place(
         return Ok(result);
     }
     result.detected_data_chunks = count_damaged_data_chunks(reader, &corrupted);
-    if !reader.mds_parities.is_empty() {
+    if !reader.cauchy_rs_parities.is_empty() {
         emit_progress(
             progress,
             format!(
-                "repair: detected {} corrupted symbol(s), attempting MDS",
+                "repair: detected {} corrupted symbol(s), attempting Cauchy RS",
                 corrupted.len()
             ),
         );
@@ -245,7 +249,7 @@ fn repair_archive_in_place(
             corrupted.remove(&fixed);
         }
         if count_damaged_data_chunks(reader, &corrupted) == 0 {
-            let repaired = repair_mds_parity(reader, &mut fh, &corrupted, progress)?;
+            let repaired = repair_cauchy_rs_parity(reader, &mut fh, &corrupted, progress)?;
             let repaired_set = repaired.iter().copied().collect::<BTreeSet<_>>();
             let (_data, mut repaired_parity) = classify_symbol_ids(reader, &repaired_set);
             result.repaired_parity.append(&mut repaired_parity);
@@ -259,7 +263,7 @@ fn repair_archive_in_place(
         emit_progress(
             progress,
             format!(
-                "repair: detected {} corrupted symbol(s), but archive has no MDS parity",
+                "repair: detected {} corrupted symbol(s), but archive has no Cauchy RS parity",
                 corrupted.len()
             ),
         );
@@ -276,7 +280,7 @@ fn repair_archive_in_place(
     Ok(result)
 }
 
-fn repair_mds_parity(
+fn repair_cauchy_rs_parity(
     reader: &ArchiveReader,
     fh: &mut LogicalArchiveReader,
     corrupted: &BTreeSet<u64>,
@@ -293,7 +297,7 @@ fn repair_mds_parity(
 
     let group_data_indices = build_group_data_indices(reader)?;
     let parity_by_symbol = reader
-        .mds_parities
+        .cauchy_rs_parities
         .iter()
         .map(|parity| (parity.symbol_index, parity))
         .collect::<BTreeMap<_, _>>();
@@ -303,14 +307,14 @@ fn repair_mds_parity(
     for sym_index in parity_unknowns {
         let parity = parity_by_symbol.get(&sym_index).ok_or_else(|| {
             AmberError::Invalid(format!(
-                "MDS parity symbol {sym_index} is missing parity metadata"
+                "Cauchy RS parity symbol {sym_index} is missing parity metadata"
             ))
         })?;
         let (data_indices, _scheme) =
             group_data_indices.get(&parity.seed_base).ok_or_else(|| {
                 AmberError::Invalid("Global parity references unknown seed_base".into())
             })?;
-        let combo = sample_mds_combination(
+        let combo = sample_cauchy_rs_combination(
             parity.seed_id as usize,
             data_indices,
             parity.row_count as usize,
@@ -330,7 +334,7 @@ fn repair_mds_parity(
         if !complete {
             emit_progress(
                 progress,
-                format!("repair: MDS could not recompute parity symbol {sym_index}"),
+                format!("repair: Cauchy RS could not recompute parity symbol {sym_index}"),
             );
             continue;
         }
@@ -342,7 +346,7 @@ fn repair_mds_parity(
     if !repaired.is_empty() {
         emit_progress(
             progress,
-            format!("repair: MDS repaired {} parity symbol(s)", repaired.len()),
+            format!("repair: Cauchy RS repaired {} parity symbol(s)", repaired.len()),
         );
     }
     Ok(repaired)
@@ -414,7 +418,7 @@ fn repair_mds(
     let mut equations: Vec<RepairEquation> = Vec::new();
     let mut symbol_cache: BTreeMap<u64, Option<Vec<u8>>> = BTreeMap::new();
 
-    for parity in &reader.mds_parities {
+    for parity in &reader.cauchy_rs_parities {
         if corrupted.contains(&parity.symbol_index) {
             continue;
         }
@@ -422,7 +426,7 @@ fn repair_mds(
             group_data_indices.get(&parity.seed_base).ok_or_else(|| {
                 AmberError::Invalid("Global parity references unknown seed_base".into())
             })?;
-        let combo = sample_mds_combination(
+        let combo = sample_cauchy_rs_combination(
             parity.seed_id as usize,
             data_indices,
             parity.row_count as usize,
@@ -461,12 +465,12 @@ fn repair_mds(
         equations.push((coeffs, rhs));
     }
     if equations.is_empty() {
-        emit_progress(progress, "repair: MDS had no usable equations".to_owned());
+        emit_progress(progress, "repair: Cauchy RS had no usable equations".to_owned());
         return Ok(Vec::new());
     }
     emit_progress(
         progress,
-        format!("repair: MDS solving {} equations", equations.len()),
+        format!("repair: Cauchy RS solving {} equations", equations.len()),
     );
     let original_equations = equations.clone();
 
@@ -491,7 +495,7 @@ fn repair_mds(
                 repaired.dedup();
                 emit_progress(
                     progress,
-                    format!("repair: MDS repaired {} symbol(s)", repaired.len()),
+                    format!("repair: Cauchy RS repaired {} symbol(s)", repaired.len()),
                 );
                 return Ok(repaired);
             }
@@ -558,14 +562,14 @@ fn repair_mds(
     if solutions.len() == unknowns.len() {
         emit_progress(
             progress,
-            format!("repair: MDS solved all unknowns ({})", unknowns.len()),
+            format!("repair: Cauchy RS solved all unknowns ({})", unknowns.len()),
         );
         let candidates = solutions
             .into_iter()
             .map(|(pos, data_bytes)| (unknowns[pos], data_bytes))
             .collect::<Vec<_>>();
         if !write_repaired_data_solution(reader, fh, &candidates, &mut repaired, progress)? {
-            for candidates in mds_candidate_solutions(
+            for candidates in cauchy_rs_candidate_solutions(
                 &original_equations,
                 &unknowns,
                 &BTreeMap::new(),
@@ -581,7 +585,7 @@ fn repair_mds(
         if !repaired.is_empty() {
             emit_progress(
                 progress,
-                format!("repair: MDS repaired {} symbol(s)", repaired.len()),
+                format!("repair: Cauchy RS repaired {} symbol(s)", repaired.len()),
             );
         }
         return Ok(repaired);
@@ -601,12 +605,12 @@ fn repair_mds(
     emit_progress(
         progress,
         format!(
-            "repair: MDS running validated elimination on {} residual vars",
+            "repair: Cauchy RS running validated elimination on {} residual vars",
             residual_vars.len()
         ),
     );
 
-    for candidates in mds_candidate_solutions(&original_equations, &unknowns, &solutions, corrupted) {
+    for candidates in cauchy_rs_candidate_solutions(&original_equations, &unknowns, &solutions, corrupted) {
         if write_repaired_data_solution(reader, fh, &candidates, &mut repaired, progress)? {
             break;
         }
@@ -616,13 +620,13 @@ fn repair_mds(
     if !repaired.is_empty() {
         emit_progress(
             progress,
-            format!("repair: MDS repaired {} symbol(s)", repaired.len()),
+            format!("repair: Cauchy RS repaired {} symbol(s)", repaired.len()),
         );
     }
     Ok(repaired)
 }
 
-fn mds_candidate_solutions(
+fn cauchy_rs_candidate_solutions(
     equations: &[RepairEquation],
     unknowns: &[u64],
     known_solutions: &BTreeMap<usize, Vec<u8>>,
@@ -630,7 +634,7 @@ fn mds_candidate_solutions(
 ) -> Vec<Vec<(u64, Vec<u8>)>> {
     let mut candidates = Vec::new();
     let omitted = BTreeSet::new();
-    if let Some(solution) = solve_mds_equation_subset(equations, unknowns.len(), known_solutions, &omitted)
+    if let Some(solution) = solve_cauchy_rs_equation_subset(equations, unknowns.len(), known_solutions, &omitted)
     {
         candidates.push(solution_to_candidates(solution, unknowns, corrupted));
     }
@@ -638,7 +642,7 @@ fn mds_candidate_solutions(
     for omit in 0..equations.len() {
         let omitted = BTreeSet::from([omit]);
         if let Some(solution) =
-            solve_mds_equation_subset(equations, unknowns.len(), known_solutions, &omitted)
+            solve_cauchy_rs_equation_subset(equations, unknowns.len(), known_solutions, &omitted)
         {
             candidates.push(solution_to_candidates(solution, unknowns, corrupted));
         }
@@ -660,7 +664,7 @@ fn solution_to_candidates(
         .collect()
 }
 
-fn solve_mds_equation_subset(
+fn solve_cauchy_rs_equation_subset(
     equations: &[RepairEquation],
     unknown_count: usize,
     known_solutions: &BTreeMap<usize, Vec<u8>>,
@@ -804,7 +808,7 @@ fn write_repaired_data_solution(
         }
         if data_bytes.len() < symbol.length as usize {
             return Err(AmberError::Invalid(
-                "MDS repair candidate is shorter than symbol length".into(),
+                "Cauchy RS repair candidate is shorter than symbol length".into(),
             ));
         }
         fh.seek(SeekFrom::Start(symbol.offset))?;
@@ -839,7 +843,7 @@ fn write_repaired_data_solution(
 
     for (sym_index, _data_bytes) in candidates {
         repaired.push(*sym_index);
-        emit_progress(progress, format!("repair: MDS repaired symbol {sym_index}"));
+        emit_progress(progress, format!("repair: Cauchy RS repaired symbol {sym_index}"));
     }
     Ok(true)
 }
@@ -860,7 +864,7 @@ fn write_repaired_symbol(
     fh.seek(SeekFrom::Start(symbol.offset))?;
     fh.write_all(actual)?;
     repaired.push(sym_index);
-    emit_progress(progress, format!("repair: MDS repaired symbol {sym_index}"));
+    emit_progress(progress, format!("repair: Cauchy RS repaired symbol {sym_index}"));
     Ok(true)
 }
 
@@ -910,11 +914,11 @@ fn build_group_data_indices(
         return Ok(group_data_indices);
     };
     for group in groups {
-        let Some(mds) = get_map(group, "mds") else {
+        let Some(cauchy_rs) = get_map(group, "cauchy_rs") else {
             continue;
         };
-        let seed_base = reader.mds_parities.first().map(|_| [0u8; 16]);
-        let stored_scheme = get_string(mds, "scheme").ok_or_else(|| {
+        let seed_base = reader.cauchy_rs_parities.first().map(|_| [0u8; 16]);
+        let stored_scheme = get_string(cauchy_rs, "scheme").ok_or_else(|| {
             AmberError::Invalid("Global parity metadata is missing its scheme".into())
         })?;
         let scheme = stored_scheme.to_owned();
@@ -926,7 +930,7 @@ fn build_group_data_indices(
             .filter_map(|sym| get_u64(&sym, "symbol_index").map(|v| v as usize))
             .collect::<Vec<_>>();
         data_indices.sort_unstable();
-        if let Some(seed_base_bytes) = crate::tlv::get_bytes(mds, "seed_base") {
+        if let Some(seed_base_bytes) = crate::tlv::get_bytes(cauchy_rs, "seed_base") {
             if seed_base_bytes.len() != 16 {
                 return Err(AmberError::Invalid(
                     "Global parity seed_base must be 16 bytes".into(),
@@ -938,7 +942,7 @@ fn build_group_data_indices(
         } else if let Some(seed) = seed_base {
             group_data_indices.insert(seed, (data_indices.clone(), scheme.clone()));
         }
-        if let Some(parity_rows) = get_list(mds, "parity") {
+        if let Some(parity_rows) = get_list(cauchy_rs, "parity") {
             for item in parity_rows {
                 if let Some(seed_base_bytes) = crate::tlv::get_bytes(item, "seed_base") {
                     if seed_base_bytes.len() != 16 {
@@ -971,7 +975,7 @@ fn open_reader(
 }
 
 fn has_inconsistent_ecc_metadata(reader: &ArchiveReader) -> bool {
-    reader.symbols.iter().any(|sym| sym.is_parity) && reader.mds_parities.is_empty()
+    reader.symbols.iter().any(|sym| sym.is_parity) && reader.cauchy_rs_parities.is_empty()
 }
 
 fn read_symbol_cached(

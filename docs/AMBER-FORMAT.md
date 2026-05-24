@@ -85,7 +85,7 @@ Record stream:
 Anchor records:
 
 - carry a bounded tail sample of symbol metadata
-- commit the archive UUID, MDS scheme, symbol size, symbol counts, seed base, and Merkle root
+- commit the archive UUID, Cauchy RS scheme, symbol size, symbol counts, seed base, and Merkle root
 - include a BLAKE3 metadata-checkpoint hash over those fields
 - are encrypted and authenticated when the archive is encrypted
 - are validation inputs for rebuild, not a competing metadata authority
@@ -96,11 +96,11 @@ Index/trailer:
 - contains manifest, chunk map, symbol map, ECC metadata, anchors, and top-level commitments
 - stored as redundant trailer frames plus locator records
 
-ECC metadata records the global parity scheme as `mds`. The scheme identifies Amber's canonical MDS-ECC construction for the archive; it is not an operator-selectable profile set.
+ECC metadata records the global parity scheme as `cauchy-rs`. The scheme identifies Amber's canonical Cauchy Reed-Solomon ECC construction for the archive; it is not an operator-selectable profile set.
 
 Parity-bearing archives must carry:
 
-- explicit MDS metadata
+- explicit Cauchy RS metadata
 - an explicit scheme name
 - the committed symbol size for the protected set
 
@@ -151,6 +151,6 @@ That rule applies to:
 - append
 - harden
 - rebuild
-- successful repair with no remaining damaged data chunks or MDS parity symbols
+- successful repair with no remaining damaged data chunks or Cauchy RS parity symbols
 
 Failed mutation must not leave a partially committed canonical archive image behind.

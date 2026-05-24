@@ -1,20 +1,20 @@
 use crate::gf65536::gf65536_inv;
 
-pub const MDS_SCHEME_NAME: &str = "mds";
-pub const MDS_MAX_TAGS: usize = 65_536;
+pub const CAUCHY_RS_SCHEME_NAME: &str = "cauchy-rs";
+pub const GF65536_TAG_SPACE: usize = 65_536;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MdsSampler {
+pub struct CauchyRsSampler {
     pub data_indices: Vec<usize>,
     pub row_count: usize,
 }
 
-impl MdsSampler {
+impl CauchyRsSampler {
     pub fn new(data_indices: Vec<usize>, row_count: usize) -> Result<Self, String> {
         if row_count == 0 {
-            return Err("row_count must be positive for MDS sampling".into());
+            return Err("row_count must be positive for Cauchy RS sampling".into());
         }
-        validate_mds_dimensions(data_indices.len(), row_count)?;
+        validate_cauchy_rs_dimensions(data_indices.len(), row_count)?;
         Ok(Self {
             data_indices,
             row_count,
@@ -22,24 +22,24 @@ impl MdsSampler {
     }
 
     pub fn combination(&self, row_id: usize) -> Result<Vec<(usize, u16)>, String> {
-        sample_mds_combination(row_id, &self.data_indices, self.row_count)
+        sample_cauchy_rs_combination(row_id, &self.data_indices, self.row_count)
     }
 }
 
-pub fn validate_mds_dimensions(data_count: usize, row_count: usize) -> Result<(), String> {
+pub fn validate_cauchy_rs_dimensions(data_count: usize, row_count: usize) -> Result<(), String> {
     if data_count == 0 {
         return Ok(());
     }
-    if data_count + row_count > MDS_MAX_TAGS {
+    if data_count + row_count > GF65536_TAG_SPACE {
         return Err(format!(
-            "global GF(2^16) MDS requires data symbols + repair rows <= {MDS_MAX_TAGS}; got {} + {}",
+            "global GF(2^16) Cauchy Reed-Solomon requires data symbols + repair rows <= {GF65536_TAG_SPACE}; got {} + {}",
             data_count, row_count
         ));
     }
     Ok(())
 }
 
-pub fn sample_mds_combination(
+pub fn sample_cauchy_rs_combination(
     row_id: usize,
     data_indices: &[usize],
     row_count: usize,
@@ -47,9 +47,9 @@ pub fn sample_mds_combination(
     if data_indices.is_empty() {
         return Ok(Vec::new());
     }
-    validate_mds_dimensions(data_indices.len(), row_count)?;
+    validate_cauchy_rs_dimensions(data_indices.len(), row_count)?;
     if row_id >= row_count {
-        return Err("row_id out of range for MDS sampling".into());
+        return Err("row_id out of range for Cauchy RS sampling".into());
     }
 
     let row_tag = data_indices.len() + row_id;
@@ -59,7 +59,7 @@ pub fn sample_mds_combination(
         .map(|(position, symbol_index)| {
             let denominator = (row_tag ^ position) as u16;
             if denominator == 0 {
-                return Err("MDS Cauchy row and column tags collided".into());
+                return Err("Cauchy RS row and column tags collided".into());
             }
             Ok((*symbol_index, gf65536_inv(denominator)))
         })
@@ -72,19 +72,19 @@ mod tests {
 
     use crate::gf65536::{gf65536_inv, gf65536_mul};
 
-    use super::{MDS_MAX_TAGS, sample_mds_combination, validate_mds_dimensions};
+    use super::{GF65536_TAG_SPACE, sample_cauchy_rs_combination, validate_cauchy_rs_dimensions};
 
     #[test]
-    fn mds_rejects_sets_larger_than_gf65536_tag_space() {
-        let err = validate_mds_dimensions(MDS_MAX_TAGS, 1).unwrap_err();
+    fn cauchy_rs_rejects_sets_larger_than_gf65536_tag_space() {
+        let err = validate_cauchy_rs_dimensions(GF65536_TAG_SPACE, 1).unwrap_err();
         assert!(err.contains("data symbols + repair rows"));
     }
 
     #[test]
-    fn mds_rows_are_dense_and_nonzero() {
+    fn cauchy_rs_rows_are_dense_and_nonzero() {
         let data_indices = (0..236).collect::<Vec<_>>();
         for row_id in 0..40 {
-            let row = sample_mds_combination(row_id, &data_indices, 40).unwrap();
+            let row = sample_cauchy_rs_combination(row_id, &data_indices, 40).unwrap();
             assert_eq!(row.len(), data_indices.len());
             assert!(row.iter().all(|(_, coeff)| *coeff != 0));
             assert_eq!(row[0].0, 0);
@@ -97,7 +97,7 @@ mod tests {
         let data_indices = (0..8).collect::<Vec<_>>();
         let rows = (0..5)
             .map(|row_id| {
-                sample_mds_combination(row_id, &data_indices, 5)
+                sample_cauchy_rs_combination(row_id, &data_indices, 5)
                     .unwrap()
                     .into_iter()
                     .collect::<BTreeMap<_, _>>()

@@ -10,7 +10,7 @@ use blake3::Hasher;
 
 use crate::chunkemit::{ChunkEmitContext, ChunkMeta, emit_file_chunks, emit_plain_chunk};
 use crate::constants::{
-    CODEC_MDS_PARITY, CODEC_NONE, DEFAULT_CHUNK_SIZE, DEFAULT_CODEC_ID,
+    CODEC_CAUCHY_RS_PARITY, CODEC_NONE, DEFAULT_CHUNK_SIZE, DEFAULT_CODEC_ID,
     FLAG_CHUNK_COMPRESS_DEFAULT, FLAG_ECC_PRESENT, FLAG_ENCRYPTED, KDF_ARGON2ID_V2,
     RFLAG_CHUNK_TAG_PRESENT, RFLAG_PARITY_RECORD, RTYPE_CHUNK, RTYPE_ENTRY_BEGIN, RTYPE_ENTRY_END,
     VERSION_MAJOR, VERSION_MINOR, new_uuid_bytes,
@@ -19,14 +19,14 @@ use crate::encryption::{EncryptionContext, derive_user_secret};
 use crate::entryutil::{EntryBeginPayload, build_entry_begin_payload};
 use crate::error::{AmberError, AmberResult};
 use crate::globalparity::{
-    GLOBAL_PARITY_SCHEME_MDS, GenericGlobalParitySampler, MIN_TOTAL_PARITY_ROWS_FLOOR,
+    GLOBAL_PARITY_SCHEME_CAUCHY_RS, GenericGlobalParitySampler, MIN_TOTAL_PARITY_ROWS_FLOOR,
     canonical_global_parity_rows, require_canonical_global_parity_scheme,
 };
 use crate::hashutil::{merkle_leaf_from_chunk_tag, merkle_parent};
-use crate::mds::MDS_MAX_TAGS;
-use crate::mdscompute::iter_mds_payloads;
+use crate::cauchy_rs::GF65536_TAG_SPACE;
+use crate::cauchy_rs_compute::iter_cauchy_rs_payloads;
 use crate::pathutil::{validate_archive_path, validate_symlink_target};
-use crate::reader::{ArchiveReader, ChunkDesc, Entry as ReaderEntry, MdsParityInfo, SymbolInfo};
+use crate::reader::{ArchiveReader, ChunkDesc, Entry as ReaderEntry, CauchyRsParityInfo, SymbolInfo};
 use crate::records::{build_chunk_header_ext, write_record};
 use crate::superblock::{SuperblockEncryptionParams, pack_superblock};
 use crate::tlv::{TlvMap, TlvValue, dumps_index};
@@ -52,11 +52,11 @@ pub struct ArchiveWriter {
     pub symbols: Vec<SymbolInfo>,
     pub symbol_size: u64,
     pub symbol_data: BTreeMap<usize, Vec<u8>>,
-    pub mds_seed_base: [u8; 16],
+    pub cauchy_rs_seed_base: [u8; 16],
     pub global_parity_scheme: &'static str,
     pub min_total_parity_rows: Option<usize>,
-    pub mds_epsilon_ppm: Option<usize>,
-    pub mds_parities: Vec<MdsParityInfo>,
+    pub cauchy_rs_epsilon_ppm: Option<usize>,
+    pub cauchy_rs_parities: Vec<CauchyRsParityInfo>,
     pub anchors: Vec<TlvMap>,
     pub anchor_interval_bytes: u64,
     bytes_since_anchor: u64,
@@ -88,7 +88,7 @@ impl ArchiveWriter {
         password: Option<&str>,
         keyfile: Option<&Path>,
         part_size: Option<u64>,
-        mds_epsilon_ppm: Option<usize>,
+        cauchy_rs_epsilon_ppm: Option<usize>,
         min_total_parity_rows: Option<usize>,
         global_parity_scheme: Option<&str>,
         anchor_interval_bytes: Option<u64>,
@@ -121,14 +121,14 @@ impl ArchiveWriter {
             symbols: Vec::new(),
             symbol_size: DEFAULT_SYMBOL_SIZE,
             symbol_data: BTreeMap::new(),
-            mds_seed_base: random_array_16()?,
+            cauchy_rs_seed_base: random_array_16()?,
             global_parity_scheme: require_canonical_global_parity_scheme(
-                global_parity_scheme.unwrap_or(GLOBAL_PARITY_SCHEME_MDS),
+                global_parity_scheme.unwrap_or(GLOBAL_PARITY_SCHEME_CAUCHY_RS),
             )
             .map_err(AmberError::Invalid)?,
             min_total_parity_rows: min_total_parity_rows.or(Some(MIN_TOTAL_PARITY_ROWS_FLOOR)),
-            mds_epsilon_ppm,
-            mds_parities: Vec::new(),
+            cauchy_rs_epsilon_ppm,
+            cauchy_rs_parities: Vec::new(),
             anchors: Vec::new(),
             anchor_interval_bytes: anchor_interval_bytes.unwrap_or(64 * 1024 * 1024),
             bytes_since_anchor: 0,
@@ -182,9 +182,9 @@ impl ArchiveWriter {
                 "symbol size must be configured before opening archive".into(),
             ));
         }
-        self.symbol_size = recommended_mds_symbol_size(
+        self.symbol_size = recommended_cauchy_rs_symbol_size(
             payload_bytes_bound,
-            self.mds_epsilon_ppm,
+            self.cauchy_rs_epsilon_ppm,
             self.min_total_parity_rows,
         )?;
         Ok(())
@@ -396,7 +396,7 @@ impl ArchiveWriter {
         let symbol_data = std::mem::take(&mut self.symbol_data);
         let anchor_interval_bytes = self.anchor_interval_bytes;
         let bytes_since_anchor = &mut self.bytes_since_anchor;
-        let mds_seed_base = self.mds_seed_base;
+        let cauchy_rs_seed_base = self.cauchy_rs_seed_base;
         let global_parity_scheme = self.global_parity_scheme;
         let symbol_size = self.symbol_size;
         let archive_uuid = self.archive_uuid;
@@ -434,7 +434,7 @@ impl ArchiveWriter {
                                 &symbol_maps,
                                 symbol_size,
                                 merkle_root,
-                                Some(&mds_seed_base),
+                                Some(&cauchy_rs_seed_base),
                                 Some(global_parity_scheme),
                             );
                             let off = write_anchor_record(fh, &anchor_payload, encryptor)?;
@@ -483,7 +483,7 @@ impl ArchiveWriter {
             &symbol_maps,
             self.symbol_size,
             merkle_root,
-            Some(&self.mds_seed_base),
+            Some(&self.cauchy_rs_seed_base),
             Some(self.global_parity_scheme),
         );
         let file = self
@@ -499,10 +499,10 @@ impl ArchiveWriter {
         let default_codec = self.default_codec;
         let entries = self.entries.clone();
         let symbols = self.symbols.clone();
-        let mds_parities = self.mds_parities.clone();
+        let cauchy_rs_parities = self.cauchy_rs_parities.clone();
         let anchors = self.anchors.clone();
         let scheme = self.global_parity_scheme;
-        let seed_base = self.mds_seed_base;
+        let seed_base = self.cauchy_rs_seed_base;
         write_index_trailer_with_segments(
             file,
             encryptor,
@@ -515,7 +515,7 @@ impl ArchiveWriter {
                     default_codec,
                     &entries,
                     &symbols,
-                    &mds_parities,
+                    &cauchy_rs_parities,
                     &anchors,
                     segments_meta,
                     scheme,
@@ -599,7 +599,7 @@ impl ArchiveWriter {
             return Ok(());
         }
         let n = data_indices.len();
-        let mut target = if let Some(ppm) = self.mds_epsilon_ppm {
+        let mut target = if let Some(ppm) = self.cauchy_rs_epsilon_ppm {
             let base = (n * ppm) / 1_000_000;
             (if n >= 2 { 2 } else { 1 }).max(base)
         } else {
@@ -608,15 +608,15 @@ impl ArchiveWriter {
         if let Some(min_total) = self.min_total_parity_rows {
             target = target.max(min_total);
         }
-        let start_seed = self.mds_parities.len();
+        let start_seed = self.cauchy_rs_parities.len();
         let sampler = GenericGlobalParitySampler::new(
             self.global_parity_scheme,
-            self.mds_seed_base,
+            self.cauchy_rs_seed_base,
             data_indices,
             start_seed + target,
         )
         .map_err(AmberError::Invalid)?;
-        let parity_payloads = iter_mds_payloads(
+        let parity_payloads = iter_cauchy_rs_payloads(
             start_seed,
             target,
             |seed_id| sampler.combination(seed_id),
@@ -633,9 +633,9 @@ impl ArchiveWriter {
                 0,
                 seed_id as u32,
                 self.symbol_size as u32,
-                CODEC_MDS_PARITY,
+                CODEC_CAUCHY_RS_PARITY,
                 &tag32,
-                &self.mds_seed_base,
+                &self.cauchy_rs_seed_base,
                 0,
             );
             let rflags = RFLAG_CHUNK_TAG_PRESENT | RFLAG_PARITY_RECORD;
@@ -656,17 +656,17 @@ impl ArchiveWriter {
                 tag32,
                 stripe_index: -1,
                 is_parity: true,
-                seed_base: Some(self.mds_seed_base),
+                seed_base: Some(self.cauchy_rs_seed_base),
             });
             self.symbol_data
                 .insert(symbol_index as usize, final_payload.clone());
-            self.mds_parities.push(MdsParityInfo {
+            self.cauchy_rs_parities.push(CauchyRsParityInfo {
                 symbol_index,
                 seed_id: seed_id as u64,
                 offset: payload_offset,
                 length: final_payload.len() as u64,
                 tag32,
-                seed_base: self.mds_seed_base,
+                seed_base: self.cauchy_rs_seed_base,
                 row_count: target as u64,
             });
         }
@@ -762,11 +762,11 @@ fn build_index_payload(
     default_codec: u16,
     entries: &[WriterEntry],
     symbols: &[SymbolInfo],
-    mds_parities: &[MdsParityInfo],
+    cauchy_rs_parities: &[CauchyRsParityInfo],
     anchors: &[TlvMap],
     segments_meta: &[TlvMap],
     global_parity_scheme: &str,
-    mds_seed_base: [u8; 16],
+    cauchy_rs_seed_base: [u8; 16],
     symbol_size: u64,
 ) -> AmberResult<Vec<u8>> {
     let mut idx_map = TlvMap::new();
@@ -888,24 +888,24 @@ fn build_index_payload(
             group.insert("symbol_size".into(), TlvValue::U64(symbol_size));
             let data_symbol_count = symbols.iter().filter(|s| !s.is_parity).count();
             let epsilon_ppm = if data_symbol_count > 0 {
-                (mds_parities.len() * 1_000_000 / data_symbol_count) as u64
+                (cauchy_rs_parities.len() * 1_000_000 / data_symbol_count) as u64
             } else {
                 0
             };
             group.insert(
-                "mds".into(),
+                "cauchy_rs".into(),
                 TlvValue::Map({
-                    let mut mds = TlvMap::new();
-                    mds.insert(
+                    let mut cauchy_rs = TlvMap::new();
+                    cauchy_rs.insert(
                         "scheme".into(),
                         TlvValue::String(global_parity_scheme.into()),
                     );
-                    mds.insert("seed_base".into(), TlvValue::Bytes(mds_seed_base.to_vec()));
-                    mds.insert("epsilon_ppm".into(), TlvValue::U64(epsilon_ppm));
-                    mds.insert(
+                    cauchy_rs.insert("seed_base".into(), TlvValue::Bytes(cauchy_rs_seed_base.to_vec()));
+                    cauchy_rs.insert("epsilon_ppm".into(), TlvValue::U64(epsilon_ppm));
+                    cauchy_rs.insert(
                         "parity".into(),
                         TlvValue::List(
-                            mds_parities
+                            cauchy_rs_parities
                                 .iter()
                                 .map(|parity| {
                                     BTreeMap::from([
@@ -924,7 +924,7 @@ fn build_index_payload(
                                 .collect(),
                         ),
                     );
-                    mds
+                    cauchy_rs
                 }),
             );
             group.insert("symbols".into(), TlvValue::List(symbol_tlv_maps(symbols)));
@@ -936,9 +936,9 @@ fn build_index_payload(
     dumps_index(&idx_map)
 }
 
-fn recommended_mds_symbol_size(
+fn recommended_cauchy_rs_symbol_size(
     payload_bytes_bound: u64,
-    mds_epsilon_ppm: Option<usize>,
+    cauchy_rs_epsilon_ppm: Option<usize>,
     min_total_parity_rows: Option<usize>,
 ) -> AmberResult<u64> {
     if payload_bytes_bound == 0 {
@@ -948,15 +948,15 @@ fn recommended_mds_symbol_size(
     for _ in 0..64 {
         let data_symbols = payload_bytes_bound.div_ceil(symbol_size) as usize;
         let repair_rows =
-            repair_rows_for_symbol_count(data_symbols, mds_epsilon_ppm, min_total_parity_rows)?;
-        if data_symbols + repair_rows <= MDS_MAX_TAGS {
+            repair_rows_for_symbol_count(data_symbols, cauchy_rs_epsilon_ppm, min_total_parity_rows)?;
+        if data_symbols + repair_rows <= GF65536_TAG_SPACE {
             return Ok(symbol_size);
         }
-        if repair_rows >= MDS_MAX_TAGS {
+        if repair_rows >= GF65536_TAG_SPACE {
             symbol_size = checked_next_symbol_size(symbol_size, symbol_size.saturating_mul(2))?;
             continue;
         }
-        let available_data_tags = MDS_MAX_TAGS - repair_rows;
+        let available_data_tags = GF65536_TAG_SPACE - repair_rows;
         if available_data_tags == 0 {
             return Err(AmberError::Invalid(
                 "requested repair budget leaves no GF(2^16) data tags".into(),
@@ -966,19 +966,19 @@ fn recommended_mds_symbol_size(
         symbol_size = checked_next_symbol_size(symbol_size, next)?;
     }
     Err(AmberError::Invalid(
-        "failed to choose a GF(2^16) MDS symbol size".into(),
+        "failed to choose a GF(2^16) Cauchy RS symbol size".into(),
     ))
 }
 
 fn repair_rows_for_symbol_count(
     data_symbols: usize,
-    mds_epsilon_ppm: Option<usize>,
+    cauchy_rs_epsilon_ppm: Option<usize>,
     min_total_parity_rows: Option<usize>,
 ) -> AmberResult<usize> {
     if data_symbols == 0 {
         return Ok(0);
     }
-    let mut target = if let Some(ppm) = mds_epsilon_ppm {
+    let mut target = if let Some(ppm) = cauchy_rs_epsilon_ppm {
         let base = (data_symbols * ppm) / 1_000_000;
         (if data_symbols >= 2 { 2 } else { 1 }).max(base)
     } else {
@@ -998,7 +998,7 @@ fn checked_next_symbol_size(current: u64, requested: u64) -> AmberResult<u64> {
     let next = align_even_u64(requested.max(current + 2).max(DEFAULT_SYMBOL_SIZE));
     if next > u32::MAX as u64 {
         return Err(AmberError::Invalid(
-            "archive is too large for a single GF(2^16) MDS recovery set with u32 parity symbol length".into(),
+            "archive is too large for a single GF(2^16) Cauchy RS recovery set with u32 parity symbol length".into(),
         ));
     }
     Ok(next)

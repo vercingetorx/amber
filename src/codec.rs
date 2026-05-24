@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use zstd::stream::{read::Decoder as ZstdDecoder, write::Encoder as ZstdEncoder};
 
-use crate::constants::{CODEC_MDS_PARITY, CODEC_DEFLATE, CODEC_NONE, CODEC_ZSTD};
+use crate::constants::{CODEC_CAUCHY_RS_PARITY, CODEC_DEFLATE, CODEC_NONE, CODEC_ZSTD};
 use crate::error::{AmberError, AmberResult};
 
 #[derive(Clone, Debug)]
@@ -18,7 +18,7 @@ impl Codec {
 
     pub fn compress(&self, data: &[u8]) -> AmberResult<Vec<u8>> {
         match self.codec_id {
-            CODEC_NONE | CODEC_MDS_PARITY => Ok(data.to_vec()),
+            CODEC_NONE | CODEC_CAUCHY_RS_PARITY => Ok(data.to_vec()),
             CODEC_DEFLATE => {
                 let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(6));
                 encoder.write_all(data)?;
@@ -43,7 +43,7 @@ impl Codec {
 
     pub fn decompress(&self, data: &[u8], max_output_size: Option<usize>) -> AmberResult<Vec<u8>> {
         match self.codec_id {
-            CODEC_NONE | CODEC_MDS_PARITY => {
+            CODEC_NONE | CODEC_CAUCHY_RS_PARITY => {
                 if let Some(limit) = max_output_size
                     && data.len() > limit
                 {
@@ -64,7 +64,7 @@ impl Codec {
 
 pub fn compressed_len_upper_bound(codec_id: u16, input_len: u64) -> AmberResult<u64> {
     match codec_id {
-        CODEC_NONE | CODEC_MDS_PARITY => Ok(input_len),
+        CODEC_NONE | CODEC_CAUCHY_RS_PARITY => Ok(input_len),
         CODEC_DEFLATE => deflate_compress_bound(input_len),
         CODEC_ZSTD => zstd_compress_bound(input_len),
         other => Err(AmberError::Invalid(format!(

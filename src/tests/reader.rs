@@ -281,13 +281,13 @@
                     }]),
                 );
                 group.insert(
-                    "mds".into(),
+                    "cauchy_rs".into(),
                     TlvValue::Map({
-                        let mut mds = TlvMap::new();
-                        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
-                        mds.insert("epsilon_ppm".into(), TlvValue::U64(0));
-                        mds.insert("parity".into(), TlvValue::List(vec![]));
-                        mds
+                        let mut cauchy_rs = TlvMap::new();
+                        cauchy_rs.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        cauchy_rs.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        cauchy_rs.insert("parity".into(), TlvValue::List(vec![]));
+                        cauchy_rs
                     }),
                 );
                 group
@@ -336,7 +336,7 @@
             anchor.insert("symbol_size".into(), TlvValue::U64(65_536));
             anchor.insert("merkle_root".into(), TlvValue::Bytes(vec![0; 32]));
             anchor.insert("archive_uuid".into(), TlvValue::Bytes(archive_uuid.to_vec()));
-            anchor.insert("scheme".into(), TlvValue::String("mds".into()));
+            anchor.insert("scheme".into(), TlvValue::String("cauchy-rs".into()));
             anchor.insert("total_symbol_count".into(), TlvValue::U64(1));
             anchor.insert("data_symbol_count".into(), TlvValue::U64(1));
             anchor.insert("parity_symbol_count".into(), TlvValue::U64(0));
@@ -348,7 +348,7 @@
                         65_536,
                         merkle_root,
                         &[],
-                        "mds",
+                        "cauchy-rs",
                         1,
                         1,
                         0,
@@ -426,13 +426,13 @@
                     }]),
                 );
                 group.insert(
-                    "mds".into(),
+                    "cauchy_rs".into(),
                     TlvValue::Map({
-                        let mut mds = TlvMap::new();
-                        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
-                        mds.insert("epsilon_ppm".into(), TlvValue::U64(0));
-                        mds.insert("parity".into(), TlvValue::List(vec![]));
-                        mds
+                        let mut cauchy_rs = TlvMap::new();
+                        cauchy_rs.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        cauchy_rs.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        cauchy_rs.insert("parity".into(), TlvValue::List(vec![]));
+                        cauchy_rs
                     }),
                 );
                 group
@@ -509,13 +509,13 @@
                     }]),
                 );
                 group.insert(
-                    "mds".into(),
+                    "cauchy_rs".into(),
                     TlvValue::Map({
-                        let mut mds = TlvMap::new();
-                        mds.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
-                        mds.insert("epsilon_ppm".into(), TlvValue::U64(0));
-                        mds.insert("parity".into(), TlvValue::List(vec![]));
-                        mds
+                        let mut cauchy_rs = TlvMap::new();
+                        cauchy_rs.insert("seed_base".into(), TlvValue::Bytes(vec![0xA5; 16]));
+                        cauchy_rs.insert("epsilon_ppm".into(), TlvValue::U64(0));
+                        cauchy_rs.insert("parity".into(), TlvValue::List(vec![]));
+                        cauchy_rs
                     }),
                 );
                 group

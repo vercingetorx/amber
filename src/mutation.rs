@@ -11,7 +11,8 @@ use crate::codec::compressed_len_upper_bound;
 use crate::constants::FLAG_ENCRYPTED;
 use crate::error::{AmberError, AmberResult};
 use crate::globalparity::{
-    GLOBAL_PARITY_SCHEME_MDS, MIN_TOTAL_PARITY_ROWS_FLOOR, require_canonical_global_parity_scheme,
+    GLOBAL_PARITY_SCHEME_CAUCHY_RS, MIN_TOTAL_PARITY_ROWS_FLOOR,
+    require_canonical_global_parity_scheme,
 };
 use crate::reader::{ArchiveReader, Entry as ReaderEntry};
 use crate::tlv::{get_list, get_map, get_string};
@@ -33,7 +34,7 @@ pub struct RewritePlan {
     pub password: Option<String>,
     pub keyfile: Option<PathBuf>,
     pub part_size: Option<u64>,
-    pub mds_epsilon_ppm: usize,
+    pub cauchy_rs_epsilon_ppm: usize,
     pub min_total_parity_rows: Option<usize>,
     pub global_parity_scheme: String,
 }
@@ -109,7 +110,7 @@ pub fn rewrite_archive_to_path(
             } else {
                 Some(sb.multipart_part_size)
             },
-            mds_epsilon_ppm: infer_mds_epsilon(&reader),
+            cauchy_rs_epsilon_ppm: infer_cauchy_rs_epsilon(&reader),
             min_total_parity_rows: Some(infer_total_parity_rows(&reader)),
             global_parity_scheme: infer_global_parity_scheme(&reader)?,
         };
@@ -132,7 +133,7 @@ pub fn rewrite_archive_to_path(
             plan.password.as_deref(),
             plan.keyfile.as_deref(),
             plan.part_size,
-            Some(plan.mds_epsilon_ppm),
+            Some(plan.cauchy_rs_epsilon_ppm),
             plan.min_total_parity_rows,
             Some(&plan.global_parity_scheme),
             None,
@@ -345,12 +346,12 @@ fn validate_no_staged_path_conflicts(
     Ok(())
 }
 
-fn infer_mds_epsilon(reader: &ArchiveReader) -> usize {
+fn infer_cauchy_rs_epsilon(reader: &ArchiveReader) -> usize {
     let total_data = reader.symbols.iter().filter(|info| !info.is_parity).count();
     if total_data == 0 {
         return 0;
     }
-    let target = reader.mds_parities.len();
+    let target = reader.cauchy_rs_parities.len();
     if target == 0 {
         return 0;
     }
@@ -362,13 +363,13 @@ fn infer_total_parity_rows(reader: &ArchiveReader) -> usize {
     if data_count == 0 {
         return 0;
     }
-    reader.mds_parities.len().max(MIN_TOTAL_PARITY_ROWS_FLOOR)
+    reader.cauchy_rs_parities.len().max(MIN_TOTAL_PARITY_ROWS_FLOOR)
 }
 
 fn infer_global_parity_scheme(reader: &ArchiveReader) -> AmberResult<String> {
     let has_ecc_symbols = reader.symbols.iter().any(|symbol| symbol.is_parity);
-    if !has_ecc_symbols && reader.mds_parities.is_empty() {
-        return Ok(GLOBAL_PARITY_SCHEME_MDS.into());
+    if !has_ecc_symbols && reader.cauchy_rs_parities.is_empty() {
+        return Ok(GLOBAL_PARITY_SCHEME_CAUCHY_RS.into());
     }
     let Some(index) = reader.index.as_ref() else {
         return Err(AmberError::Invalid(
@@ -382,20 +383,22 @@ fn infer_global_parity_scheme(reader: &ArchiveReader) -> AmberResult<String> {
     };
     let Some(group) = groups
         .iter()
-        .filter(|group| get_map(group, "mds").is_some())
+        .filter(|group| get_map(group, "cauchy_rs").is_some())
         .max_by_key(|group| crate::tlv::get_u64(group, "group_id").unwrap_or(0))
     else {
         return Err(AmberError::Invalid(
-            "archive with parity symbols is missing MDS metadata".into(),
+            "archive with parity symbols is missing Cauchy RS metadata".into(),
         ));
     };
-    let Some(mds) = get_map(group, "mds") else {
+    let Some(cauchy_rs) = get_map(group, "cauchy_rs") else {
         return Err(AmberError::Invalid(
-            "archive with parity symbols is missing MDS metadata".into(),
+            "archive with parity symbols is missing Cauchy RS metadata".into(),
         ));
     };
-    let Some(stored_scheme) = get_string(mds, "scheme") else {
-        return Err(AmberError::Invalid("MDS metadata is missing its scheme".into()));
+    let Some(stored_scheme) = get_string(cauchy_rs, "scheme") else {
+        return Err(AmberError::Invalid(
+            "Cauchy RS metadata is missing its scheme".into(),
+        ));
     };
     Ok(require_canonical_global_parity_scheme(stored_scheme)
         .map_err(AmberError::Invalid)?

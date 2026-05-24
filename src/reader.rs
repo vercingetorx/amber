@@ -64,7 +64,7 @@ pub struct SymbolInfo {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MdsParityInfo {
+pub struct CauchyRsParityInfo {
     pub symbol_index: u64,
     pub seed_id: u64,
     pub offset: u64,
@@ -85,7 +85,7 @@ pub struct ArchiveReader {
     pub segments_meta: Vec<TlvMap>,
     pub symbols: Vec<SymbolInfo>,
     pub symbol_size: u64,
-    pub mds_parities: Vec<MdsParityInfo>,
+    pub cauchy_rs_parities: Vec<CauchyRsParityInfo>,
     pub anchors_meta: Vec<TlvMap>,
     pub anchors_data: Vec<TlvMap>,
     pub anchor_total_count: usize,
@@ -119,7 +119,7 @@ impl ArchiveReader {
             segments_meta: Vec::new(),
             symbols: Vec::new(),
             symbol_size: 65_536,
-            mds_parities: Vec::new(),
+            cauchy_rs_parities: Vec::new(),
             anchors_meta: Vec::new(),
             anchors_data: Vec::new(),
             anchor_total_count: 0,
@@ -691,7 +691,7 @@ impl ArchiveReader {
 
     fn load_ecc_groups(&mut self, idx: &TlvMap, archive_size: u64) -> AmberResult<()> {
         self.symbols.clear();
-        self.mds_parities.clear();
+        self.cauchy_rs_parities.clear();
         let groups = get_list(idx, "ecc_groups").cloned().unwrap_or_default();
         if groups.is_empty() {
             return Ok(());
@@ -751,11 +751,11 @@ impl ArchiveReader {
                 }
             }
 
-            if let Some(mds) = get_map(&group, "mds") {
-                let group_seed_base = required_16(mds, "seed_base")?;
-                let group_parity = required_list(mds, "parity")?.clone();
+            if let Some(cauchy_rs) = get_map(&group, "cauchy_rs") {
+                let group_seed_base = required_16(cauchy_rs, "seed_base")?;
+                let group_parity = required_list(cauchy_rs, "parity")?.clone();
                 for item in group_parity {
-                    self.mds_parities.push(MdsParityInfo {
+                    self.cauchy_rs_parities.push(CauchyRsParityInfo {
                         symbol_index: required_u64(&item, "symbol_index")?,
                         seed_id: required_u64(&item, "seed_id")?,
                         offset: required_u64(&item, "offset")?,
