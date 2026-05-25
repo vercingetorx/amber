@@ -10,7 +10,7 @@ Purpose:
 
 - provide exact full archive recovery whenever damage is within the committed Cauchy RS repair budget
 - when full recovery is impossible, maximize verified structural recovery
-- never promote guessed or weakly inferred data as valid recovered output
+- never promote guessed or unverifiable data as valid recovered output
 
 ## Recovery principles
 

@@ -1,6 +1,6 @@
 # Amber ECC
 
-Amber's production ECC regime is `Cauchy Reed-Solomon ECC`.
+Amber's archive ECC scheme is `Cauchy Reed-Solomon ECC`.
 
 Short summary:
 
@@ -9,9 +9,9 @@ Short summary:
 - every repair symbol is dense over the protected data-symbol set
 - with `R` available repair symbols, repairs any `R` missing or corrupt data symbols
 - symbol size is chosen before writing so `data_symbols + repair_symbols <= 65,536`
-- large archives scale by increasing symbol size, not by splitting recovery into independent sets
+- large archives scale by increasing symbol size
 - supports plaintext and encrypted archives
-- uses one canonical policy rather than multiple operator-selectable ECC modes
+- uses one canonical ECC policy
 
 The on-disk global parity scheme name is `cauchy-rs`. Parity-bearing archives must store that scheme explicitly in Cauchy RS metadata. Amber treats missing Cauchy RS scheme metadata as malformed rather than guessing it during mutation.
 

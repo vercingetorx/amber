@@ -20,7 +20,7 @@ Scope:
 
 ## Goals
 
-- Safety first: strong chunk integrity, archive-level verification, and built-in ECC.
+- Archive integrity: chunk verification, archive-level verification, and built-in ECC.
 - Determinism: archive structure and repair metadata are reproducible from committed archive state.
 - Streaming writes: records can be emitted sequentially and finalized with a trailer/index.
 - Random access: the trailer/index provides fast listing, extraction, and verification.
@@ -29,7 +29,7 @@ Scope:
 ## Non-goals
 
 - in-place mutation as a committed end state
-- weak or optional ECC profiles
+- multiple ECC profile modes
 - per-file encryption modes
 - silent recovery or guessed data promotion
 

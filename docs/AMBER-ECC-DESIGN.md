@@ -2,7 +2,7 @@
 
 Status:
 
-- current production ECC design for Amber
+- current archive ECC design for Amber
 - canonical architecture document
 
 ## What Cauchy Reed-Solomon ECC is
@@ -28,7 +28,7 @@ Amber ECC must satisfy all of these at once:
 - compatibility with canonical rewrite-on-commit mutation
 - repair after mixed data and parity damage
 - stable archive metadata needed for reimplementation years later
-- no best-effort coefficient fallback or geometry special case
+- deterministic coefficient and row construction
 
 ## Storage domain
 
@@ -86,7 +86,7 @@ The archive commits its symbol size in ECC metadata and anchor records. Anchor r
 
 ## Canonical policy
 
-Amber uses one production ECC policy.
+Amber uses one archive ECC policy.
 
 Notable rules:
 
@@ -108,7 +108,7 @@ For large archives, Amber must choose a symbol size such that:
 data_symbols + repair_symbols <= 65,536
 ```
 
-Splitting into independent recovery sets weakens the global recovery guarantee and is not the canonical design.
+Amber uses one recovery set per archive.
 
 The writer chooses symbol size before emitting records. It uses codec-specific stored-size upper bounds, not observed compression output guesses, because the `GF(2^16)` tag-space requirement must be satisfied before parity generation starts.
 

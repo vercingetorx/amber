@@ -11,23 +11,23 @@ This repository is the Rust reference implementation. It provides:
 - the canonical `.amber` archive format implementation
 - the `amber` CLI
 - the canonical rewrite-on-commit mutation model for append, harden, rebuild, and repair
-- the production ECC regime: `Cauchy Reed-Solomon ECC`
+- the archive ECC scheme: `Cauchy Reed-Solomon ECC`
 
 ## At a Glance
 
 - Long-term archive format with built-in integrity and repair.
 - Uncompressed by default to minimize corruption blast radius.
 - Optional whole-archive encryption with XChaCha20-Poly1305 and Argon2id.
-- One production ECC regime: `Cauchy Reed-Solomon ECC`.
+- One archive ECC scheme: `Cauchy Reed-Solomon ECC`.
 - Canonical rewrite-on-commit mutation semantics.
 
 ## Why Amber
 
-- Strong defaults only.
+- Fixed archive policies.
   - AEAD: XChaCha20-Poly1305
   - KDF: Argon2id with the archive's fixed parameters
   - Integrity and commitment hashing: BLAKE3
-  - ECC: one canonical `Cauchy Reed-Solomon ECC` policy, not a menu of weak profiles
+  - ECC: one canonical `Cauchy Reed-Solomon ECC` policy
 - Integrity everywhere.
   - Per-chunk tags
   - Per-file hashes
@@ -38,7 +38,7 @@ This repository is the Rust reference implementation. It provides:
   - Encrypted archives do not expose plaintext metadata.
   - Parity and anchors remain encrypted when the archive is encrypted.
   - Maintenance operations require the same credential model as the archive.
-- Self-healing by design.
+- Repair metadata.
   - `Cauchy Reed-Solomon ECC` is Amber's deterministic global `GF(2^16)` archive code.
   - Recovery and rebuild flows can reconstruct canonical metadata from surviving content when the trailer is damaged.
 - Canonical mutations.
@@ -62,7 +62,7 @@ This repository is the Rust reference implementation. It provides:
 
 ## ECC Recovery Model
 
-Amber now uses a single global Cauchy RS recovery set over archive symbols. The recovery limit is information-theoretic rather than benchmark-shaped:
+Amber uses one Cauchy Reed-Solomon recovery set over the archive's stored symbols:
 
 ```text
 N data symbols + R repair symbols
@@ -244,7 +244,7 @@ Operational rules:
 - Repair before hardening.
   - If `verify` fails, run `amber repair`, then verify again.
   - Run `amber harden` only once `amber verify` passes and `amber scrub` reports no damaged repair redundancy.
-  - If you see repair events, adding `1-3%` more Cauchy RS parity is a reasonable way to restore margin.
+  - If repair consumes parity, use `amber harden` to add more Cauchy RS repair symbols.
 - After moving archives to new media:
   - run `verify`
   - consider `harden` to refresh parity margin
@@ -252,7 +252,7 @@ Operational rules:
 ## Repair Model
 
 - Amber chooses the archive symbol size before writing so that the protected data symbols plus repair symbols fit in one `GF(2^16)` Cauchy RS set.
-- The default symbol size is `64 KiB`; large archives use larger symbols rather than partitioning recovery into weaker independent sets.
+- The default symbol size is `64 KiB`; large archives use larger symbols to keep one recovery set.
 - Any number of bit or byte errors inside one stored symbol count as one symbol erasure once verification localizes the damage.
 - With `R` surviving repair symbols, Cauchy RS repair can recover any `R` missing or corrupt data symbols in the protected set.
 - Parity damage consumes parity margin: damaged repair symbols are not available to repair data until they are recomputed.
